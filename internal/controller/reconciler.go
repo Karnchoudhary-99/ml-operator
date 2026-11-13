@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
+	"github.com/Karnchoudhary-99/ml-operator/internal/autoscale"
+	"github.com/Karnchoudhary-99/ml-operator/internal/metrics"
 	"github.com/Karnchoudhary-99/ml-operator/internal/registry"
 	"github.com/Karnchoudhary-99/ml-operator/internal/render"
 	"github.com/Karnchoudhary-99/ml-operator/internal/rollout"
@@ -28,6 +30,12 @@ const (
 	ActionUpdateService ActionKind = "UpdateService"
 	// ActionDeleteService deletes the fronting Service.
 	ActionDeleteService ActionKind = "DeleteService"
+	// ActionCreateHPA creates the HorizontalPodAutoscaler.
+	ActionCreateHPA ActionKind = "CreateHPA"
+	// ActionUpdateHPA updates the HorizontalPodAutoscaler.
+	ActionUpdateHPA ActionKind = "UpdateHPA"
+	// ActionDeleteHPA deletes the HorizontalPodAutoscaler.
+	ActionDeleteHPA ActionKind = "DeleteHPA"
 	// ActionNoOp means the live state already matches the desired
 	// state; the plan contains exactly one NoOp action.
 	ActionNoOp ActionKind = "NoOp"
@@ -73,17 +81,33 @@ type Reconciler struct {
 	// Now is the clock the rollout state machine reads. Tests set it
 	// to a controllable clock; nil means time.Now.
 	Now func() time.Time
+	// Metrics collects the operator's Prometheus metrics; Events
+	// records Kubernetes-style events. New fills both with defaults
+	// (never nil); callers may replace them to read the output.
+	Metrics *metrics.Collector
+	Events  *metrics.Recorder
 
 	// rollouts is the per-deployment canary rollout state, keyed by
 	// "namespace/name". A done state (promoted or aborted) stays in
 	// the map so a later reconcile of the same generation does not
 	// restart the rollout; a new generation resets it.
 	rollouts map[string]rollout.State
+	// scalers is the per-deployment autoscaler state, keyed by
+	// "namespace/name". It holds the scale-down stabilization
+	// window; deleting a deployment drops its scaler.
+	scalers map[string]*autoscale.Scaler
 }
 
 // New returns a Reconciler over reg and cluster.
 func New(reg *registry.Registry, cluster Cluster) *Reconciler {
-	return &Reconciler{Registry: reg, Cluster: cluster, rollouts: make(map[string]rollout.State)}
+	return &Reconciler{
+		Registry: reg,
+		Cluster:  cluster,
+		Metrics:  metrics.NewCollector(),
+		Events:   metrics.NewRecorder(0),
+		rollouts: make(map[string]rollout.State),
+		scalers:  make(map[string]*autoscale.Scaler),
+	}
 }
 
 // now returns the reconciler's clock.
@@ -110,6 +134,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		// terminal for this generation: no requeue, the next spec
 		// change (new generation) triggers a fresh reconcile.
 		msg := "invalid spec: " + strings.Join(errorStrings(errs), "; ")
+		r.recordEvent(key, metrics.EventWarning, "InvalidSpec", msg)
 		r.updateStatus(key, d, api.PhaseFailed, 0, msg)
 		return Result{Phase: api.PhaseFailed, Message: msg}, nil
 	}
@@ -123,6 +148,46 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		rs, hasRollout = r.rolloutState(key, d), true
 	} else {
 		delete(r.rollouts, key)
+	}
+
+	// Autoscaling: the scaler decides the effective replica count
+	// from the latest cluster metrics, before anything renders. The
+	// base is the live Deployment's count (a previous decision or a
+	// manual scale), falling back to the spec when nothing is live
+	// yet. Without a metrics observation the scaler holds the
+	// current count — unknown load never scales.
+	if d.Spec.Autoscaling != nil {
+		current := *d.Spec.Replicas
+		if liveOK {
+			current = liveStable.Replicas
+		}
+		sample := autoscale.NoSample
+		if m, ok := r.Cluster.Metrics(key); ok {
+			sample = autoscale.Sample{
+				CPUUtilizationPercent: m.CPUUtilizationPercent,
+				RequestsPerSecond:     m.RequestsPerSecond,
+			}
+		}
+		decision := r.scalerFor(key).Scale(*d.Spec.Autoscaling, current, sample, r.now())
+		if decision.Changed {
+			direction := "up"
+			reason := "ScaledUp"
+			if decision.Desired < current {
+				direction = "down"
+				reason = "ScaledDown"
+			}
+			if r.Metrics != nil {
+				r.Metrics.Inc(metrics.MetricScaleEventsTotal, 1, "direction", direction)
+			}
+			r.recordEvent(key, metrics.EventNormal, reason, decision.Reason)
+			effective := decision.Desired
+			d.Spec.Replicas = &effective
+		} else if decision.Held {
+			if r.Metrics != nil {
+				r.Metrics.Inc(metrics.MetricScaleEventsTotal, 1, "direction", "held")
+			}
+			r.recordEvent(key, metrics.EventNormal, "ScaleDownHeld", decision.Reason)
+		}
 	}
 
 	desired := render.DeploymentFor(d)
@@ -143,15 +208,17 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		}
 	}
 	desiredSvc := render.ServiceFor(d)
+	desiredHPA, hasHPA := render.HPAFor(d)
 
-	plan := r.plan(key, d, desired, desiredSvc, canary)
+	plan := r.plan(key, d, desired, desiredSvc, canary, desiredHPA, hasHPA)
 	actions := plan
 	for _, a := range plan {
-		if err := r.apply(a, desired, canary, desiredSvc); err != nil {
+		if err := r.apply(a, desired, canary, desiredSvc, desiredHPA); err != nil {
 			// A failed apply is Degraded, not Failed: the spec is
 			// fine, the cluster operation is what broke, and the
 			// caller should retry.
 			msg := fmt.Sprintf("apply %s %s failed: %v", a.Kind, a.Key, err)
+			r.recordEvent(key, metrics.EventWarning, "ApplyFailed", msg)
 			r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 		}
@@ -201,15 +268,23 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	canaryKey := ns + "/" + name + "-canary"
 	interval := time.Duration(d.Spec.Canary.IntervalSeconds) * time.Second
 
-	// The gate is readiness-only for now: the cluster reports ready
-	// replicas, and there is no metrics source yet for error rate or
-	// latency. The metrics phase fills those in.
+	// The gate reads the live canary's readiness plus the cluster
+	// metrics source when it reports: error rate, p95 latency, and
+	// the model-load probe. Without metrics the gate stays
+	// readiness-only, as before.
 	var ev rollout.Evaluation
 	if liveCanary, ok := r.Cluster.GetDeployment(canaryKey); ok {
-		ev = rollout.Evaluate(rollout.Gate{}, rollout.Sample{
+		sample := rollout.Sample{
 			ReadyReplicas:   r.Cluster.ReadyReplicas(canaryKey),
 			DesiredReplicas: liveCanary.Replicas,
-		})
+		}
+		if m, ok := r.Cluster.Metrics(canaryKey); ok {
+			sample.ErrorRate = m.ErrorRate
+			sample.LatencyP95Ms = m.LatencyP95Ms
+			sample.ModelLoadKnown = m.ModelLoadKnown
+			sample.ModelLoaded = m.ModelLoaded
+		}
+		ev = rollout.Evaluate(rollout.Gate{}, sample)
 	} else {
 		ev = rollout.Evaluation{Pending: true, Reasons: []string{"canary Deployment not created yet"}}
 	}
@@ -236,6 +311,10 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey,
 			Reason: fmt.Sprintf("canary aborted after %d failed health gates", next.Failures)})
 		msg := fmt.Sprintf("canary aborted after %d failed health gates: %s", next.Failures, strings.Join(ev.Reasons, "; "))
+		if r.Metrics != nil {
+			r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "aborted")
+		}
+		r.recordEvent(key, metrics.EventWarning, "RolloutAborted", msg)
 		r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
 
@@ -263,6 +342,10 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 		} else if stableReady > 0 {
 			phase = api.PhaseDegraded
 		}
+		if r.Metrics != nil {
+			r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "promoted")
+		}
+		r.recordEvent(key, metrics.EventNormal, "CanaryPromoted", msg)
 		r.updateStatus(key, d, phase, stableReady, msg)
 		return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
 
@@ -302,10 +385,12 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 
 // plan diffs the desired state against the live cluster and returns
 // the minimal ordered apply plan: Deployment first, then canary (if
-// any), then Service. It never mutates the cluster. canary is nil
-// when no canary Deployment is desired for this reconcile — either
-// the strategy is not Canary, or the rollout already finished.
-func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service, canary *render.Deployment) []Action {
+// any), then Service, then HPA. It never mutates the cluster. canary
+// is nil when no canary Deployment is desired for this reconcile —
+// either the strategy is not Canary, or the rollout already
+// finished. hasHPA is false when autoscaling is disabled: any live
+// HPA is then deleted as leftover.
+func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service, canary *render.Deployment, desiredHPA render.HPA, hasHPA bool) []Action {
 	var actions []Action
 
 	live, ok := r.Cluster.GetDeployment(key)
@@ -348,6 +433,19 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 		actions = append(actions, Action{Kind: ActionUpdateService, Key: key, Reason: strings.Join(reasons, ", ")})
 	}
 
+	liveHPA, ok := r.Cluster.GetHPA(key)
+	if hasHPA {
+		if !ok {
+			actions = append(actions, Action{Kind: ActionCreateHPA, Key: key, Reason: "hpa does not exist"})
+		} else if reasons := render.HPADiffReasons(desiredHPA, liveHPA); len(reasons) > 0 {
+			actions = append(actions, Action{Kind: ActionUpdateHPA, Key: key, Reason: strings.Join(reasons, ", ")})
+		}
+	} else if ok {
+		// Autoscaling was disabled: the leftover HPA would keep
+		// scaling the Deployment, so remove it.
+		actions = append(actions, Action{Kind: ActionDeleteHPA, Key: key, Reason: "autoscaling disabled"})
+	}
+
 	if len(actions) == 0 {
 		return []Action{{Kind: ActionNoOp, Key: key, Reason: "live state matches desired state"}}
 	}
@@ -356,7 +454,7 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 
 // apply executes one plan action against the cluster, resolving the
 // object from the desired state the plan was built from.
-func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.Deployment, svc render.Service) error {
+func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.Deployment, svc render.Service, hpa render.HPA) error {
 	switch a.Kind {
 	case ActionCreateDeployment, ActionUpdateDeployment:
 		stableKey := desired.Namespace + "/" + desired.Name
@@ -376,6 +474,10 @@ func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.D
 		return r.Cluster.ApplyService(svc)
 	case ActionDeleteService:
 		return r.Cluster.DeleteService(a.Key)
+	case ActionCreateHPA, ActionUpdateHPA:
+		return r.Cluster.ApplyHPA(hpa)
+	case ActionDeleteHPA:
+		return r.Cluster.DeleteHPA(a.Key)
 	case ActionNoOp:
 		return nil
 	}
@@ -384,9 +486,12 @@ func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.D
 
 // reconcileDeleted removes the cluster objects owned by a deployment
 // that left the registry: stable Deployment, canary Deployment (if
-// any), and Service. Deleting something already gone is a no-op.
+// any), Service, and HPA. Deleting something already gone is a
+// no-op. The autoscaler state goes too, so a later deployment with
+// the same name starts with a fresh stabilization window.
 func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
 	delete(r.rollouts, key)
+	delete(r.scalers, key)
 	var actions []Action
 	ns, name, _ := strings.Cut(key, "/")
 	canaryKey := ns + "/" + name + "-canary"
@@ -400,6 +505,7 @@ func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
 		{ActionDeleteDeployment, key, r.hasDeployment, r.Cluster.DeleteDeployment},
 		{ActionDeleteDeployment, canaryKey, r.hasDeployment, r.Cluster.DeleteDeployment},
 		{ActionDeleteService, key, r.hasService, r.Cluster.DeleteService},
+		{ActionDeleteHPA, key, r.hasHPA, r.Cluster.DeleteHPA},
 	} {
 		if !target.get(target.key) {
 			continue
@@ -426,9 +532,36 @@ func (r *Reconciler) hasService(key string) bool {
 	return ok
 }
 
+func (r *Reconciler) hasHPA(key string) bool {
+	_, ok := r.Cluster.GetHPA(key)
+	return ok
+}
+
+// scalerFor returns the autoscaler state for key, creating it on
+// first use.
+func (r *Reconciler) scalerFor(key string) *autoscale.Scaler {
+	if s, ok := r.scalers[key]; ok {
+		return s
+	}
+	s := &autoscale.Scaler{}
+	r.scalers[key] = s
+	return s
+}
+
+// recordEvent records an operator event when an event recorder is
+// configured; a nil recorder is a no-op.
+func (r *Reconciler) recordEvent(key string, typ metrics.EventType, reason, message string) {
+	if r.Events != nil {
+		r.Events.Record(key, typ, reason, message)
+	}
+}
+
 // updateStatus records the reconcile outcome in the registry. The
 // Ready / Progressing / Available conditions are rebuilt from the
-// phase every time, so a stale condition can never linger.
+// phase every time, so a stale condition can never linger. It also
+// records the reconcile in the metrics collector: one counter
+// increment per outcome, and the ready/desired replica gauges for
+// this deployment.
 func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.Phase, ready int32, msg string) {
 	status := api.ModelDeploymentStatus{
 		Phase:              phase,
@@ -440,6 +573,13 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 	status.SetCondition(api.Condition{Type: "Progressing", Status: boolStatus(phase == api.PhaseProgressing), Reason: string(phase), Message: msg})
 	status.SetCondition(api.Condition{Type: "Available", Status: boolStatus(phase == api.PhaseAvailable), Reason: string(phase), Message: msg})
 	r.Registry.UpdateStatus(key, status)
+	if r.Metrics != nil {
+		r.Metrics.Inc(metrics.MetricReconcilesTotal, 1, "result", strings.ToLower(string(phase)))
+		r.Metrics.Set(metrics.MetricReadyReplicas, float64(ready), "deployment", key)
+		if d.Spec.Replicas != nil {
+			r.Metrics.Set(metrics.MetricDesiredReplicas, float64(*d.Spec.Replicas), "deployment", key)
+		}
+	}
 }
 
 func equalWeights(a, b []int32) bool {
