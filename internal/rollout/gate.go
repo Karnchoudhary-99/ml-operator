@@ -6,10 +6,9 @@ import "fmt"
 // advances. Thresholds set to 0 are skipped, except MinReadyRatio,
 // which defaults to 1.0 (every canary pod ready) — a canary that is
 // not fully ready has not proven itself yet. The readiness check is
-// always available (the cluster reports it); error rate and latency
-// need a metrics source, so the controller only fills them when it
-// has one — today that is never, and the gate is readiness-only.
-// The metrics phase wires real error-rate/latency samples in.
+// always available (the cluster reports it); error rate, latency and
+// the model-load probe are filled from the cluster metrics source
+// when one reports them, and skipped otherwise.
 type Gate struct {
 	// MinReadyRatio is the minimum ready/desired canary replicas
 	// (0-1). 0 means "all ready".
@@ -32,6 +31,16 @@ type Sample struct {
 	// LatencyP95Ms is the p95 request latency in milliseconds. 0
 	// means "no metrics source".
 	LatencyP95Ms float64
+	// ModelLoadKnown is true when the cluster reported whether the
+	// model finished loading (the model-load probe: the serving
+	// container's readiness endpoint for the model itself, e.g.
+	// Triton's /v2/models/<name>/ready). False means the probe has
+	// not reported yet, and the check is skipped.
+	ModelLoadKnown bool
+	// ModelLoaded is true when the model finished loading into the
+	// serving container. A canary whose model is not loaded yet has
+	// not proven itself, whatever its pod readiness says.
+	ModelLoaded bool
 }
 
 // Evaluation is the outcome of checking a Sample against a Gate.
@@ -64,6 +73,12 @@ func Evaluate(g Gate, s Sample) Evaluation {
 		return Evaluation{Pending: true, Reasons: []string{
 			fmt.Sprintf("0/%d canary replicas ready (pods still starting)", s.DesiredReplicas),
 		}}
+	}
+	// The model-load probe: a canary whose model has not loaded yet
+	// is pending, not failed — the pods are up but the model is
+	// still warming up, so the gate must not burn failure budget.
+	if s.ModelLoadKnown && !s.ModelLoaded {
+		return Evaluation{Pending: true, Reasons: []string{"model not loaded yet (model-load probe)"}}
 	}
 	ev := Evaluation{Pass: true}
 	ratio := float64(s.ReadyReplicas) / float64(s.DesiredReplicas)

@@ -17,9 +17,9 @@ with the desired state.
 - [x] Reconciler core (desired vs live state, diff, apply plan)
 - [x] Deployment + Service rendering (image, replicas, resources, ports)
 - [x] Rollout strategies (recreate, rolling update, canary)
-- [ ] Autoscaling (HPA from CPU / request-rate / GPU signals)
-- [ ] Health + readiness gates (model-load probe, traffic shift) — canary health gate done; model-load probe remains
-- [ ] Metrics + events (Prometheus, Kubernetes events)
+- [x] Autoscaling (HPA from CPU / request-rate / GPU signals)
+- [x] Health + readiness gates (model-load probe, traffic shift)
+- [x] Metrics + events (Prometheus, Kubernetes events)
 - [ ] CLI (`mlop`: apply, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
 
@@ -129,11 +129,15 @@ adopts the other's pods.
   even increments, last step always exactly 100% (e.g. weight 10,
   3 steps → `[10 40 70 100]`; 0 steps means one jump to 100%).
 - `Evaluate` checks the health gate: minimum ready ratio (default
-  all canary pods ready), max error rate, max p95 latency (a 0
-  threshold disables that check). Zero ready replicas is *pending*,
-  not a failure — a fresh canary must not burn its failure budget
-  while its pods come up. Error rate and latency need a metrics
-  source, so the gate is readiness-only until the metrics phase.
+  all canary pods ready), max error rate (5%), max p95 latency
+  (500ms) — the reconciler's conservative defaults; a 0 threshold
+  disables that check. The error-rate and latency samples come from
+  the cluster metrics source when it reports them, and are skipped
+  otherwise. Zero ready replicas is *pending*, not a failure — a
+  fresh canary must not burn its failure budget while its pods come
+  up. The model-load probe is pending the same way: when the
+  cluster reports the model has not finished loading yet, the gate
+  holds until it has, whatever pod readiness says.
 - The state machine holds, advances (once the step interval has
   elapsed), promotes at the final weight, or aborts after 3
   consecutive gate failures (configurable). A pass clears the
@@ -152,6 +156,52 @@ resets on a new generation or canary-spec change; a done state is
 kept so the same generation never restarts. `operator --demo` runs
 a full canary rollout (10% → 55% → 100% → promote) against the
 fake cluster.
+
+### Autoscaling
+
+Enable it per deployment with `spec.autoscaling` (`minReplicas`,
+`maxReplicas`, `targetCPUUtilization` and/or
+`targetRequestsPerSecond` — at least one target required). The
+operator renders a matching `HorizontalPodAutoscaler` and drives
+the same decisions in-process, so the fake cluster and the tests
+scale without a metrics server:
+
+```yaml
+spec:
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilization: 70
+    targetRequestsPerSecond: 100
+```
+
+`internal/autoscale` is pure decision logic: each enabled target
+proposes `ceil(current × observed / target)`, the largest proposal
+wins, and the result is clamped to `[min, max]`. Scale-up applies
+immediately; scale-down waits out a 5-minute stabilization window
+(HPA default) after the last scale-down, so a brief dip never
+churns pods. No metrics observation means hold — unknown load
+never scales. While autoscaling is on, the scaler owns the replica
+count: `spec.replicas` is only the starting point, the same
+ownership a real HPA has. Disabling autoscaling garbage-collects
+the leftover HPA. `operator --demo` runs a spike (140% CPU, 2 → 4
+replicas) and a dip (10% CPU, 4 → 1) after the canary tour.
+
+### Metrics + events
+
+`internal/metrics` is the operator's observability surface,
+dependency-free: a Prometheus-style collector (`Collector.Inc` /
+`Set` / `Render`, exposition format) and a Kubernetes-style event
+recorder (bounded ring, identical events aggregate with a count,
+newest first). The reconciler records every reconcile outcome
+(`ml_operator_reconciles_total{result}`), rollout promotions and
+aborts (`ml_operator_rollouts_total{result}`), scaling decisions
+(`ml_operator_scale_events_total{direction=up|down|held}`), ready
+and desired replica gauges per deployment, and events
+(`ScaledUp`, `ScaledDown`, `ScaleDownHeld`, `CanaryPromoted`,
+`RolloutAborted`, `InvalidSpec`, `ApplyFailed`). The demo prints
+both at the end. The scrape endpoint and the real Kubernetes event
+sink land with the controller-runtime phase.
 
 ## License
 

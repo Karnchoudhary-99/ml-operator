@@ -189,3 +189,42 @@ func TestDeploymentDiffReasons(t *testing.T) {
 		t.Fatalf("identical services differ: %v", reasons)
 	}
 }
+
+func TestHPAFor(t *testing.T) {
+	// No autoscaling: no HPA object.
+	d := dep()
+	if _, ok := HPAFor(d); ok {
+		t.Fatal("HPAFor without autoscaling must return false")
+	}
+
+	// Autoscaling on: HPA carries the spec bounds and targets.
+	d.Spec.Autoscaling = &api.AutoscalingSpec{MinReplicas: 2, MaxReplicas: 8, TargetCPUUtilization: 70, TargetRequestsPerSecond: 100}
+	api.ApplyDefaults(&d)
+	hpa, ok := HPAFor(d)
+	if !ok {
+		t.Fatal("HPAFor with autoscaling must return true")
+	}
+	if hpa.MinReplicas != 2 || hpa.MaxReplicas != 8 || hpa.TargetCPUUtilization != 70 || hpa.TargetRequestsPerSecond != 100 {
+		t.Fatalf("HPA = %+v, want min 2 max 8 cpu 70 rps 100", hpa)
+	}
+	if hpa.Name != "iris-mlp" || hpa.Namespace != "default" {
+		t.Fatalf("HPA identity = %s/%s, want default/iris-mlp", hpa.Namespace, hpa.Name)
+	}
+}
+
+func TestHPADiffReasons(t *testing.T) {
+	d := dep()
+	d.Spec.Autoscaling = &api.AutoscalingSpec{MinReplicas: 1, MaxReplicas: 5, TargetCPUUtilization: 70}
+	api.ApplyDefaults(&d)
+	desired, _ := HPAFor(d)
+
+	if reasons := HPADiffReasons(desired, desired); len(reasons) != 0 {
+		t.Fatalf("identical HPAs differ: %v", reasons)
+	}
+	live := desired
+	live.MaxReplicas = 10
+	live.TargetCPUUtilization = 80
+	if reasons := HPADiffReasons(desired, live); len(reasons) != 2 {
+		t.Fatalf("HPA diff = %v, want 2 reasons (maxReplicas, targetCPU)", reasons)
+	}
+}

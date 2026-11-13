@@ -14,6 +14,8 @@ type FakeCluster struct {
 	mu          sync.Mutex
 	deployments map[string]render.Deployment
 	services    map[string]render.Service
+	hpas        map[string]render.HPA
+	metrics     map[string]ClusterMetrics
 	ready       map[string]int32
 }
 
@@ -22,6 +24,8 @@ func NewFakeCluster() *FakeCluster {
 	return &FakeCluster{
 		deployments: make(map[string]render.Deployment),
 		services:    make(map[string]render.Service),
+		hpas:        make(map[string]render.HPA),
+		metrics:     make(map[string]ClusterMetrics),
 		ready:       make(map[string]int32),
 	}
 }
@@ -57,6 +61,7 @@ func (f *FakeCluster) DeleteDeployment(key string) error {
 	defer f.mu.Unlock()
 	delete(f.deployments, key)
 	delete(f.ready, key)
+	delete(f.metrics, key)
 	return nil
 }
 
@@ -82,6 +87,49 @@ func (f *FakeCluster) DeleteService(key string) error {
 	defer f.mu.Unlock()
 	delete(f.services, key)
 	return nil
+}
+
+// GetHPA implements Cluster.
+func (f *FakeCluster) GetHPA(key string) (render.HPA, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h, ok := f.hpas[key]
+	return h, ok
+}
+
+// ApplyHPA implements Cluster.
+func (f *FakeCluster) ApplyHPA(h render.HPA) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hpas[h.Namespace+"/"+h.Name] = h
+	return nil
+}
+
+// DeleteHPA implements Cluster.
+func (f *FakeCluster) DeleteHPA(key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.hpas, key)
+	return nil
+}
+
+// Metrics implements Cluster.
+func (f *FakeCluster) Metrics(key string) (ClusterMetrics, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.metrics[key]
+	return m, ok
+}
+
+// SetMetrics records a load/health observation for the Deployment
+// at key, the way a metrics server would report it. It is a no-op
+// for a Deployment the fake has never seen.
+func (f *FakeCluster) SetMetrics(key string, m ClusterMetrics) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.deployments[key]; ok {
+		f.metrics[key] = m
+	}
 }
 
 // ReadyReplicas implements Cluster.
@@ -114,4 +162,11 @@ func (f *FakeCluster) ServiceCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.services)
+}
+
+// HPACount returns how many HPAs the fake currently holds.
+func (f *FakeCluster) HPACount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.hpas)
 }
