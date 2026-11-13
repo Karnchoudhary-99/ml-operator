@@ -128,9 +128,10 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 	desired := render.DeploymentFor(d)
 	var canary *render.Deployment
 	if hasRollout {
-		if liveOK && !rs.Done {
-			// The rollout is in flight: the stable Deployment
-			// keeps serving the previous version until promotion.
+		if liveOK && !(rs.Done && !rs.Aborted) {
+			// The rollout is in flight, or it aborted: the stable
+			// Deployment keeps serving the previous version until
+			// a promotion. Only a promoted rollout unpins it.
 			// Only the image and version label are pinned — other
 			// spec changes (port, resources, env) still apply.
 			desired.Container.Image = liveStable.Container.Image
@@ -228,6 +229,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 		// The canary failed the gate too many times: remove it and
 		// report Degraded. The stable Deployment keeps serving the
 		// previous version. Terminal for this generation.
+		actions = withoutNoOp(actions)
 		if err := r.Cluster.DeleteDeployment(canaryKey); err != nil {
 			return Result{Actions: actions}, err
 		}
@@ -240,6 +242,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	case rollout.DecisionPromote:
 		// The gate passed at the final weight: the stable
 		// Deployment takes the new image and the canary goes away.
+		actions = withoutNoOp(actions)
 		promoted := render.DeploymentFor(d)
 		if err := r.Cluster.ApplyDeployment(promoted); err != nil {
 			msg := fmt.Sprintf("promote: apply stable Deployment failed: %v", err)
@@ -266,6 +269,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	case rollout.DecisionAdvance:
 		// Step the canary to the next weight now, so the new size
 		// is live for the next reconcile's gate evaluation.
+		actions = withoutNoOp(actions)
 		c := render.CanaryDeploymentForWeight(d, next.CurrentWeight())
 		if err := r.Cluster.ApplyDeployment(c); err != nil {
 			msg := fmt.Sprintf("canary weight step failed: %v", err)
@@ -448,6 +452,16 @@ func equalWeights(a, b []int32) bool {
 		}
 	}
 	return true
+}
+
+// withoutNoOp drops a lone NoOp action: the plan found nothing to
+// do, but the rollout decision (advance/promote/abort) does real
+// work, so the result should list that work instead of a NoOp.
+func withoutNoOp(actions []Action) []Action {
+	if len(actions) == 1 && actions[0].Kind == ActionNoOp {
+		return actions[:0]
+	}
+	return actions
 }
 
 func boolStatus(v bool) string {
