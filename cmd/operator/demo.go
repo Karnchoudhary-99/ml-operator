@@ -119,6 +119,71 @@ func runDemo(w io.Writer) error {
 		return err
 	}
 	printResult(w, "reconcile 9 (in sync)", res)
+
+	// Autoscaling: the canary chapter is over, so the deployment
+	// goes back to RollingUpdate and gains an HPA (min 1, max 5,
+	// CPU 70%). With no metrics yet the scaler holds the current
+	// replica count — unknown load never scales.
+	d.Generation = 4
+	d.Spec.Strategy = api.StrategyRolling
+	d.Spec.Canary = nil
+	d.Spec.Autoscaling = &api.AutoscalingSpec{MinReplicas: 1, MaxReplicas: 5, TargetCPUUtilization: 70}
+	reg.Register(d)
+	fmt.Fprintln(w, "registered iris-mlp autoscaling (min 1, max 5, cpu 70%)")
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 10 (autoscaling on — HPA created)", res)
+
+	// A load spike (140% CPU vs 70% target) doubles the replicas.
+	cluster.SetMetrics("default/iris-mlp", controller.ClusterMetrics{CPUUtilizationPercent: 140, RequestsPerSecond: -1, ErrorRate: -1})
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 11 (load spike — scale up)", res)
+
+	// The spike is over (no metrics sample): the new pods come up
+	// and the deployment is Available at 4 replicas.
+	cluster.SetMetrics("default/iris-mlp", controller.ClusterMetrics{CPUUtilizationPercent: -1, RequestsPerSecond: -1, ErrorRate: -1})
+	cluster.SetReady("default/iris-mlp", 4)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 12 (4 replicas ready)", res)
+
+	// The load dips (10% CPU): the first scale-down applies at
+	// once, back to 1 replica.
+	cluster.SetMetrics("default/iris-mlp", controller.ClusterMetrics{CPUUtilizationPercent: 10, RequestsPerSecond: -1, ErrorRate: -1})
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 13 (load dip — scale down)", res)
+
+	cluster.SetReady("default/iris-mlp", 1)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 14 (1 replica ready)", res)
+
+	// Observability: the metrics the reconciler recorded, in
+	// Prometheus exposition format, and the events it raised.
+	fmt.Fprintln(w, "--- metrics ---")
+	fmt.Fprint(w, rec.Metrics.Render())
+	fmt.Fprintln(w, "--- events ---")
+	for _, e := range rec.Events.List() {
+		fmt.Fprintf(w, "  - %s %s %s: %s (x%d)\n", e.Type, e.Reason, e.Deployment, e.Message, e.Count)
+	}
+
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 15 (in sync)", res)
 	return nil
 }
 

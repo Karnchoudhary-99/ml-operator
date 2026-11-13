@@ -26,6 +26,14 @@ func TestRunDemo(t *testing.T) {
 		"canary advanced to 100%",
 		"canary promoted",
 		"DeleteDeployment default/iris-mlp-canary",
+		"registered iris-mlp autoscaling (min 1, max 5, cpu 70%)",
+		"CreateHPA default/iris-mlp",
+		"reconcile 11 (load spike — scale up)",
+		"ScaledUp",
+		"reconcile 13 (load dip — scale down)",
+		"ScaledDown",
+		"ml_operator_reconciles_total",
+		"ml_operator_scale_events_total",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("demo output missing %q:\n%s", want, out)
