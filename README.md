@@ -14,8 +14,8 @@ with the desired state.
 - [x] Project scaffold (README roadmap, license, gitignore, CI)
 - [x] ModelDeployment CRD types + validation (spec, status, defaults)
 - [x] In-memory model registry (register, list, get, delete, watch)
-- [ ] Reconciler core (desired vs live state, diff, apply plan)
-- [ ] Deployment + Service rendering (image, replicas, resources, ports)
+- [x] Reconciler core (desired vs live state, diff, apply plan)
+- [x] Deployment + Service rendering (image, replicas, resources, ports)
 - [ ] Rollout strategies (recreate, rolling update, canary)
 - [ ] Autoscaling (HPA from CPU / request-rate / GPU signals)
 - [ ] Health + readiness gates (model-load probe, traffic shift)
@@ -80,7 +80,37 @@ generation is a true no-op — no revision bump, no event), `Get` /
 `List` (sorted by `namespace/name`) / `Delete`, and `Watch` streams
 `Added` / `Modified` / `Deleted` events to every subscriber. A slow
 watcher drops its oldest buffered event instead of blocking the
-registry.
+registry. Status is written separately with `UpdateStatus`: it bumps
+the global revision and emits a `Modified` event without touching
+the spec or generation, because `Register` deliberately drops
+status-only re-registrations.
+
+The renderer (`internal/render`) turns a `ModelDeployment` into
+plain-Go `Deployment` / `Service` values (no client-go): stable
+selector labels (the version label lives on pod templates only, so a
+version bump never changes the selector), deterministic sorted env,
+image / resources / port / readiness probe from the spec, and a
+ClusterIP Service on port 80 forwarding to the container port.
+`DeploymentDiffReasons` / `ServiceDiffReasons` name exactly which
+managed fields drifted, so the reconciler applies only what changed.
+
+The reconciler (`internal/controller`) is level-triggered and
+idempotent: it defaults and validates the spec (an invalid spec
+becomes `Failed` and never reaches the cluster), renders the desired
+state, diffs it against the live cluster, and applies the minimal
+plan — create, update, or a single `NoOp` when already in sync.
+`Recreate` image changes delete-then-create so versions never serve
+side by side; `Canary` renders a small extra Deployment
+(`<name>-canary`, weight-sized replicas, canary-only selector) and a
+strategy change away from `Canary` removes it. Status moves
+`Pending` → `Progressing` → `Available` (`Degraded` while serving
+below the replica count), with `Ready` / `Progressing` / `Available`
+conditions rebuilt every reconcile; a deployment that leaves the
+registry has its Deployment, canary and Service garbage-collected.
+The `Cluster` interface is the only cluster surface the reconciler
+needs, and `FakeCluster` implements it in memory for tests and the
+demo loop (new Deployments start at 0 ready replicas until `SetReady`
+simulates pods passing the gate).
 
 ## License
 
