@@ -276,6 +276,16 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		return r.reconcileCanary(key, d, rs, actions)
 	}
 
+	// A direct image change (rolling update or recreate, no canary
+	// in flight): the image being replaced becomes the rollback
+	// target. The apply above already succeeded — a failed apply
+	// returned early — so recording here never points at an image
+	// that was never served.
+	if liveOK && liveStable.Container.Image != desired.Container.Image {
+		d.Status.PreviousImage = liveStable.Container.Image
+		d.Status.PreviousVersion = liveStable.Labels["ml-operator/version"]
+	}
+
 	ready := r.Cluster.ReadyReplicas(key)
 	phase := api.PhaseProgressing
 	msg := fmt.Sprintf("%d/%d replicas ready", ready, desired.Replicas)
@@ -370,6 +380,12 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	case rollout.DecisionPromote:
 		// The gate passed at the final weight: the stable
 		// Deployment takes the new image and the canary goes away.
+		// The image being replaced becomes the rollback target:
+		// record it in status before the promotion applies.
+		if liveStable, ok := r.Cluster.GetDeployment(key); ok {
+			d.Status.PreviousImage = liveStable.Container.Image
+			d.Status.PreviousVersion = liveStable.Labels["ml-operator/version"]
+		}
 		actions = withoutNoOp(actions)
 		promoted := render.DeploymentFor(d)
 		if err := r.Cluster.ApplyDeployment(promoted); err != nil {
@@ -617,6 +633,12 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 		ReadyReplicas:      ready,
 		ObservedGeneration: d.Generation,
 		Message:            msg,
+		// The rollback target survives every reconcile: it is
+		// only replaced when the stable image actually changes
+		// (promotion or direct image change, both set it on d
+		// before calling here), never rebuilt from the phase.
+		PreviousImage:   d.Status.PreviousImage,
+		PreviousVersion: d.Status.PreviousVersion,
 	}
 	status.SetCondition(api.Condition{Type: "Ready", Status: boolStatus(phase == api.PhaseAvailable), Reason: string(phase), Message: msg})
 	status.SetCondition(api.Condition{Type: "Progressing", Status: boolStatus(phase == api.PhaseProgressing), Reason: string(phase), Message: msg})

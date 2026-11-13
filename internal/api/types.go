@@ -173,6 +173,17 @@ type ModelDeploymentStatus struct {
 	ObservedGeneration int64
 	// Message is a human-readable summary of the current state.
 	Message string
+	// PreviousImage is the container image the stable Deployment
+	// served before the current one (e.g. the v1 image after a
+	// v2 promotion). Empty until the first image change. `mlop
+	// rollback` restores it. The reconciler updates it whenever
+	// the stable image actually changes — on a canary promotion
+	// and on a direct (rolling/recreate) image change — and
+	// preserves it across reconciles that change nothing.
+	PreviousImage string
+	// PreviousVersion is the model version label that went with
+	// PreviousImage.
+	PreviousVersion string
 	// Conditions are the latest condition per type (Ready, Progressing,
 	// Available), newest first within a type is not guaranteed — use
 	// ConditionFor to look one up.

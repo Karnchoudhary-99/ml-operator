@@ -84,6 +84,9 @@ func cmdStatus(opts *options, args []string) int {
 	fmt.Fprintf(opts.stdout, "phase:      %s\n", d.Status.Phase)
 	fmt.Fprintf(opts.stdout, "ready:      %d/%d replicas\n", d.Status.ReadyReplicas, desiredReplicas(d))
 	fmt.Fprintf(opts.stdout, "model:      %s (%s, %s)\n", d.Spec.Model.Image, d.Spec.Model.Framework, d.Spec.Model.Version)
+	if d.Status.PreviousImage != "" {
+		fmt.Fprintf(opts.stdout, "previous:   %s (%s) — mlop rollback restores this\n", d.Status.PreviousImage, d.Status.PreviousVersion)
+	}
 	fmt.Fprintf(opts.stdout, "strategy:   %s\n", d.Spec.Strategy)
 	if d.Spec.Autoscaling != nil {
 		fmt.Fprintf(opts.stdout, "autoscaling: min %d, max %d, cpu %d%%, rps %d\n",
