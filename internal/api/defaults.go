@@ -16,6 +16,16 @@ const (
 	DefaultHealthPeriod       int32 = 10
 	DefaultCanaryInterval     int32 = 30
 	DefaultAutoscalingMin     int32 = 1
+	// DefaultGateMaxErrorRate is the canary health gate's error
+	// budget when a rollout sets no gate thresholds of its own.
+	DefaultGateMaxErrorRate float64 = 0.05
+	// DefaultGateMaxP95LatencyMs is the canary health gate's p95
+	// latency cap when a rollout sets no gate thresholds.
+	DefaultGateMaxP95LatencyMs float64 = 500
+	// DefaultGateMinReadyRatio is the canary health gate's ready
+	// ratio when a rollout sets no gate thresholds: every canary
+	// pod must be ready before the rollout advances.
+	DefaultGateMinReadyRatio float64 = 1.0
 )
 
 // ApplyDefaults fills in every unset field of the deployment's spec
