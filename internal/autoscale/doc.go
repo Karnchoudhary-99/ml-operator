@@ -12,4 +12,9 @@
 // brief dip in load does not churn pods. A Scaler holds that
 // per-deployment state; DesiredReplicas is the stateless core for
 // callers that do not need stabilization.
+//
+// While autoscaling is on, the scaler owns the replica count:
+// spec.replicas is only the starting point, and later edits to it
+// do not move the deployment — the same ownership the Kubernetes
+// HPA has over the Deployment it scales.
 package autoscale

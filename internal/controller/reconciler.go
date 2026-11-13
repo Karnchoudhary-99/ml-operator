@@ -169,6 +169,15 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 			}
 		}
 		decision := r.scalerFor(key).Scale(*d.Spec.Autoscaling, current, sample, r.now())
+		// The scaler owns the replica count while autoscaling is
+		// on: the decision's Desired is the effective count in every
+		// case — a hold keeps the live count, no observation keeps
+		// it too — so the render below never falls back to the
+		// registered spec value and reverts a held scale-down.
+		// spec.replicas is only the starting point; that is HPA
+		// semantics, and it is documented on the autoscale package.
+		effective := decision.Desired
+		d.Spec.Replicas = &effective
 		if decision.Changed {
 			direction := "up"
 			reason := "ScaledUp"
@@ -180,8 +189,6 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 				r.Metrics.Inc(metrics.MetricScaleEventsTotal, 1, "direction", direction)
 			}
 			r.recordEvent(key, metrics.EventNormal, reason, decision.Reason)
-			effective := decision.Desired
-			d.Spec.Replicas = &effective
 		} else if decision.Held {
 			if r.Metrics != nil {
 				r.Metrics.Inc(metrics.MetricScaleEventsTotal, 1, "direction", "held")
@@ -271,7 +278,11 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	// The gate reads the live canary's readiness plus the cluster
 	// metrics source when it reports: error rate, p95 latency, and
 	// the model-load probe. Without metrics the gate stays
-	// readiness-only, as before.
+	// readiness-only, as before. The error-rate and latency
+	// thresholds are conservative defaults (5% errors, 500ms p95):
+	// a canary that errors or lags behind the stable version must
+	// not take traffic, and the spec has no per-rollout gate
+	// thresholds yet — those land with the API phase.
 	var ev rollout.Evaluation
 	if liveCanary, ok := r.Cluster.GetDeployment(canaryKey); ok {
 		sample := rollout.Sample{
@@ -284,7 +295,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			sample.ModelLoadKnown = m.ModelLoadKnown
 			sample.ModelLoaded = m.ModelLoaded
 		}
-		ev = rollout.Evaluate(rollout.Gate{}, sample)
+		ev = rollout.Evaluate(rollout.Gate{MaxErrorRate: 0.05, MaxLatencyP95Ms: 500}, sample)
 	} else {
 		ev = rollout.Evaluation{Pending: true, Reasons: []string{"canary Deployment not created yet"}}
 	}
