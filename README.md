@@ -20,7 +20,7 @@ with the desired state.
 - [x] Autoscaling (HPA from CPU / request-rate / GPU signals)
 - [x] Health + readiness gates (model-load probe, traffic shift)
 - [x] Metrics + events (Prometheus, Kubernetes events)
-- [ ] CLI (`mlop`: apply, status, logs, rollout) + demo
+- [x] CLI (`mlop`: apply, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -73,6 +73,39 @@ re-apply keeps it. The autoscaler's scale-down stabilization
 window is in-memory only, so it restarts on every invocation —
 documented in `internal/store`.
 
+The fake cluster has no pods, so nothing becomes ready on its
+own. `mlop ready` simulates pods passing the readiness gate:
+
+```bash
+mlop ready iris-mlp --replicas 2
+# default/iris-mlp: 2 pod(s) ready — phase=Available (2/2 ready)
+```
+
+`mlop logs` shows the recorded events for a deployment (newest
+first; only notable transitions are recorded — promotions, scale
+decisions, aborts, invalid specs — not routine reconciles), and
+`mlop rollout status` reports a canary in flight:
+
+```bash
+mlop logs iris-mlp
+mlop rollout status iris-mlp
+# rollout: default/iris-mlp
+#   model:      registry.example.com/iris-mlp:v2 (v2)
+#   ladder:     [10 100]
+#   step:       1/2 (weight 10%)
+#   failures:   0 consecutive gate failures
+#   state:      in progress (phase Progressing)
+```
+
+`examples/mlop-tour.sh` drives the whole flow end to end —
+apply v1, ready, canary v2 (10% → 100% → promote), then asserts
+v2 is live and the promotion is in the log:
+
+```bash
+examples/mlop-tour.sh
+# tour passed: v1 applied, v2 canaried and promoted, events logged.
+```
+
 ## How it works
 
 1. You write a `ModelDeployment` manifest: model image, replicas,
@@ -87,7 +120,7 @@ documented in `internal/store`.
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `status`; `logs`, `rollout`, `ready` follow)
+- `cmd/mlop` — CLI client (`apply`, `status`, `logs`, `rollout`, `ready`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
 - `internal/store` — JSON state file shared between mlop invocations
