@@ -28,6 +28,8 @@ with the desired state.
 ```bash
 go build ./...
 go run ./cmd/operator --help
+# Watch the reconciler work without a cluster:
+go run ./cmd/operator --demo
 ```
 
 ## How it works
