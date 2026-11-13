@@ -20,6 +20,7 @@ with the desired state.
 - [x] Autoscaling (HPA from CPU / request-rate / GPU signals)
 - [x] Health + readiness gates (model-load probe, traffic shift)
 - [x] Per-rollout health-gate thresholds (`canary.gate`)
+- [x] Rollback to previous version (`mlop rollback`)
 - [x] Metrics + events (Prometheus, Kubernetes events)
 - [x] CLI (`mlop`: apply, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
@@ -240,6 +241,20 @@ resets on a new generation or canary-spec change; a done state is
 kept so the same generation never restarts. `operator --demo` runs
 a full canary rollout (10% → 55% → 100% → promote) against the
 fake cluster.
+
+### Rollback
+
+The status remembers the image the stable Deployment served before
+the current one (`status.previousImage` / `previousVersion`,
+recorded by the reconciler on every image change — canary
+promotion or direct rolling/recreate update). `mlop rollback
+<name>` restores it as a new generation, so it rolls out through
+the deployment's normal strategy: a canary rollback is itself
+canary-gated, and the version being rolled back from becomes the
+new previous image, so a second rollback returns to it. It refuses
+when there is no previous version yet, or the deployment already
+serves it. `mlop status <name>` shows the rollback target, and
+`examples/rollback-tour.sh` walks the whole story end to end.
 
 ### Autoscaling
 
