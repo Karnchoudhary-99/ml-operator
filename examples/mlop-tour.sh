@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# mlop end-to-end tour: apply v1 -> pods ready -> Available, then a
+# canary rollout of v2 (10% -> 100% -> promote) driven entirely
+# through the CLI. Every step asserts the expected output, so the
+# script is a demo and a smoke test in one.
+#
+# Usage: examples/mlop-tour.sh
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+MLOP="$WORK/mlop"
+STATE="$WORK/state.json"
+
+go build -o "$MLOP" ./cmd/mlop
+
+step() { echo; echo "=== $* ==="; }
+
+step "apply iris-mlp v1"
+"$MLOP" --state "$STATE" apply -f examples/iris-mlp.yaml
+
+step "status (Progressing, 0/2 ready)"
+"$MLOP" --state "$STATE" status iris-mlp
+
+step "pods come up"
+"$MLOP" --state "$STATE" ready iris-mlp --replicas 2
+"$MLOP" --state "$STATE" status iris-mlp | grep -q "phase:      Available"
+
+step "canary rollout of v2 (10% -> 100% -> promote)"
+"$MLOP" --state "$STATE" apply -f examples/iris-mlp-canary.yaml
+"$MLOP" --state "$STATE" rollout status iris-mlp
+"$MLOP" --state "$STATE" ready iris-mlp --replicas 2 --canary
+sleep 2
+"$MLOP" --state "$STATE" rollout status iris-mlp | grep -q "weight 100%"
+sleep 2
+"$MLOP" --state "$STATE" rollout status iris-mlp | grep -q "state:      promoted"
+
+step "v2 is live, and the promotion is in the log"
+"$MLOP" --state "$STATE" status iris-mlp | grep -q "registry.example.com/iris-mlp:v2"
+"$MLOP" --state "$STATE" logs iris-mlp | grep -q "CanaryPromoted"
+
+echo
+echo "tour passed: v1 applied, v2 canaried and promoted, events logged."
