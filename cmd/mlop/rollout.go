@@ -24,7 +24,7 @@ func cmdRollout(opts *options, args []string) int {
 	fs.Usage = func() {
 		fmt.Fprint(opts.stderr, "Usage: mlop rollout status <name>\n")
 	}
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(reorderFlags(fs, args[1:])); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {

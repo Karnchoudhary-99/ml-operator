@@ -18,7 +18,7 @@ func cmdLogs(opts *options, args []string) int {
 		fmt.Fprint(opts.stderr, "Usage: mlop logs <name> [--tail N]\n")
 	}
 	tail := fs.Int("tail", 20, "show at most N events (0 = all)")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {

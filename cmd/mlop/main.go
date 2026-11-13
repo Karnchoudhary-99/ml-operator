@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
 )
@@ -91,3 +92,40 @@ State:
   persist in a JSON state file (default ~/.mlop/state.json, or
   --state / $MLOP_STATE), so separate invocations share one world.
 `
+
+// reorderFlags moves flag tokens (and the values of flags that take
+// one) before positional arguments, so `mlop ready iris-mlp
+// --replicas 2` parses the same as `mlop ready --replicas 2
+// iris-mlp`. Go's flag package stops at the first positional, so
+// without this, flags after the name would be swallowed as extra
+// positional arguments. Unknown flags are left for flag.Parse to
+// reject with its usual error.
+func reorderFlags(fs *flag.FlagSet, args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if len(a) > 1 && a[0] == '-' {
+			name := strings.TrimLeft(a, "-")
+			if idx := strings.Index(name, "="); idx >= 0 {
+				name = name[:idx]
+			}
+			flags = append(flags, a)
+			if f := fs.Lookup(name); f != nil && !isBoolFlag(f) && !strings.Contains(a, "=") && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		positional = append(positional, a)
+	}
+	return append(flags, positional...)
+}
+
+func isBoolFlag(f *flag.Flag) bool {
+	bf, ok := f.Value.(interface{ IsBoolFlag() bool })
+	return ok && bf.IsBoolFlag()
+}

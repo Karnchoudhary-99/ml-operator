@@ -20,7 +20,7 @@ func cmdStatus(opts *options, args []string) int {
 	fs.Usage = func() {
 		fmt.Fprint(opts.stderr, "Usage: mlop status [name]\n")
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
 	if fs.NArg() > 1 {

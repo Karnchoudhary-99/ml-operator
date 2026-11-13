@@ -23,7 +23,7 @@ func cmdReady(opts *options, args []string) int {
 	}
 	replicas := fs.Int("replicas", -1, "how many pods pass the readiness gate")
 	canary := fs.Bool("canary", false, "target the canary Deployment instead of the stable one")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
