@@ -316,11 +316,11 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	// The gate reads the live canary's readiness plus the cluster
 	// metrics source when it reports: error rate, p95 latency, and
 	// the model-load probe. Without metrics the gate stays
-	// readiness-only, as before. The error-rate and latency
-	// thresholds are conservative defaults (5% errors, 500ms p95):
-	// a canary that errors or lags behind the stable version must
-	// not take traffic, and the spec has no per-rollout gate
-	// thresholds yet — those land with the API phase.
+	// readiness-only, as before. The thresholds come from the
+	// rollout's own spec (canary.gate, defaulted by ApplyDefaults
+	// to 5% errors / 500ms p95 / all pods ready), so a
+	// latency-sensitive model can demand a tighter gate and a noisy
+	// one a looser one — the reconciler never hardcodes them.
 	var ev rollout.Evaluation
 	if liveCanary, ok := r.Cluster.GetDeployment(canaryKey); ok {
 		sample := rollout.Sample{
@@ -333,7 +333,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			sample.ModelLoadKnown = m.ModelLoadKnown
 			sample.ModelLoaded = m.ModelLoaded
 		}
-		ev = rollout.Evaluate(rollout.Gate{MaxErrorRate: 0.05, MaxLatencyP95Ms: 500}, sample)
+		ev = rollout.Evaluate(gateFor(d), sample)
 	} else {
 		ev = rollout.Evaluation{Pending: true, Reasons: []string{"canary Deployment not created yet"}}
 	}
@@ -628,6 +628,26 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 		if d.Spec.Replicas != nil {
 			r.Metrics.Set(metrics.MetricDesiredReplicas, float64(*d.Spec.Replicas), "deployment", key)
 		}
+	}
+}
+
+// gateFor builds the health gate for a canary rollout from the
+// spec's gate thresholds. Reconcile runs ApplyDefaults first, so a
+// canary spec always carries a non-nil gate by here; the nil guard
+// only covers direct callers that skip defaults.
+func gateFor(d api.ModelDeployment) rollout.Gate {
+	if d.Spec.Canary == nil || d.Spec.Canary.Gate == nil {
+		return rollout.Gate{
+			MaxErrorRate:    api.DefaultGateMaxErrorRate,
+			MaxLatencyP95Ms: api.DefaultGateMaxP95LatencyMs,
+			MinReadyRatio:   api.DefaultGateMinReadyRatio,
+		}
+	}
+	g := d.Spec.Canary.Gate
+	return rollout.Gate{
+		MaxErrorRate:    g.MaxErrorRate,
+		MaxLatencyP95Ms: g.MaxP95LatencyMs,
+		MinReadyRatio:   g.MinReadyRatio,
 	}
 }
 

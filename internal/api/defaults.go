@@ -16,6 +16,16 @@ const (
 	DefaultHealthPeriod       int32 = 10
 	DefaultCanaryInterval     int32 = 30
 	DefaultAutoscalingMin     int32 = 1
+	// DefaultGateMaxErrorRate is the canary health gate's error
+	// budget when a rollout sets no gate thresholds of its own.
+	DefaultGateMaxErrorRate float64 = 0.05
+	// DefaultGateMaxP95LatencyMs is the canary health gate's p95
+	// latency cap when a rollout sets no gate thresholds.
+	DefaultGateMaxP95LatencyMs float64 = 500
+	// DefaultGateMinReadyRatio is the canary health gate's ready
+	// ratio when a rollout sets no gate thresholds: every canary
+	// pod must be ready before the rollout advances.
+	DefaultGateMinReadyRatio float64 = 1.0
 )
 
 // ApplyDefaults fills in every unset field of the deployment's spec
@@ -51,6 +61,28 @@ func ApplyDefaults(d *ModelDeployment) {
 	if spec.Strategy == StrategyCanary && spec.Canary != nil {
 		if spec.Canary.IntervalSeconds == 0 {
 			spec.Canary.IntervalSeconds = DefaultCanaryInterval
+		}
+		// Gate thresholds: a missing gate gets the full default
+		// set; a partial gate keeps the user's values and fills
+		// only the zero fields, so a rollout that sets just an
+		// error budget still gets the default latency cap and
+		// ready ratio instead of silently disabling those checks.
+		if spec.Canary.Gate == nil {
+			spec.Canary.Gate = &GateSpec{
+				MaxErrorRate:    DefaultGateMaxErrorRate,
+				MaxP95LatencyMs: DefaultGateMaxP95LatencyMs,
+				MinReadyRatio:   DefaultGateMinReadyRatio,
+			}
+		} else {
+			if spec.Canary.Gate.MaxErrorRate == 0 {
+				spec.Canary.Gate.MaxErrorRate = DefaultGateMaxErrorRate
+			}
+			if spec.Canary.Gate.MaxP95LatencyMs == 0 {
+				spec.Canary.Gate.MaxP95LatencyMs = DefaultGateMaxP95LatencyMs
+			}
+			if spec.Canary.Gate.MinReadyRatio == 0 {
+				spec.Canary.Gate.MinReadyRatio = DefaultGateMinReadyRatio
+			}
 		}
 	}
 	if spec.Autoscaling != nil && spec.Autoscaling.MinReplicas == 0 {

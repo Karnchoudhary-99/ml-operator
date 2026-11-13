@@ -111,6 +111,31 @@ type CanarySpec struct {
 	Steps int32
 	// IntervalSeconds is the pause between steps.
 	IntervalSeconds int32
+	// Gate overrides the health-gate thresholds for this rollout.
+	// Nil means the operator defaults (5% errors, 500ms p95, all
+	// canary pods ready). A rollout can loosen or tighten the gate
+	// — a latency-sensitive model gets a lower p95 cap, a noisy
+	// one a higher error budget — but a threshold never disables
+	// its check: a zero field takes the default, it does not turn
+	// the check off.
+	Gate *GateSpec
+}
+
+// GateSpec sets the health-gate thresholds for one canary rollout.
+// It mirrors rollout.Gate, minus the "0 disables the check"
+// semantics: here a zero field means "use the operator default",
+// because ApplyDefaults fills every zero field before the gate is
+// ever evaluated.
+type GateSpec struct {
+	// MaxErrorRate is the maximum tolerated error fraction (0-1).
+	// 0 means the default (5%).
+	MaxErrorRate float64
+	// MaxP95LatencyMs is the maximum tolerated p95 latency in
+	// milliseconds. 0 means the default (500ms).
+	MaxP95LatencyMs float64
+	// MinReadyRatio is the minimum ready/desired canary replicas
+	// (0-1). 0 means the default (1.0, every canary pod ready).
+	MinReadyRatio float64
 }
 
 // AutoscalingSpec configures horizontal autoscaling for the model.
