@@ -87,3 +87,24 @@ func TestEvaluate(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluateModelLoadProbe(t *testing.T) {
+	// Pods ready but the model not loaded: pending, never a failure.
+	ev := Evaluate(Gate{}, Sample{ReadyReplicas: 2, DesiredReplicas: 2, ModelLoadKnown: true, ModelLoaded: false})
+	if ev.Pass || !ev.Pending {
+		t.Fatalf("model not loaded = %+v, want pending, not pass", ev)
+	}
+	if !strings.Contains(strings.Join(ev.Reasons, " "), "model not loaded yet") {
+		t.Fatalf("reasons = %v, want model-load reason", ev.Reasons)
+	}
+	// Model loaded: the gate passes on readiness as before.
+	ev = Evaluate(Gate{}, Sample{ReadyReplicas: 2, DesiredReplicas: 2, ModelLoadKnown: true, ModelLoaded: true})
+	if !ev.Pass || ev.Pending {
+		t.Fatalf("model loaded = %+v, want pass", ev)
+	}
+	// Probe has not reported yet: skipped, gate judges readiness only.
+	ev = Evaluate(Gate{}, Sample{ReadyReplicas: 2, DesiredReplicas: 2, ModelLoadKnown: false, ModelLoaded: false})
+	if !ev.Pass {
+		t.Fatalf("probe unknown = %+v, want pass (check skipped)", ev)
+	}
+}

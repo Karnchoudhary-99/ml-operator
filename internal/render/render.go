@@ -69,6 +69,27 @@ type Service struct {
 	TargetPort int32 // the container port (spec.Port)
 }
 
+// HPA is the rendered HorizontalPodAutoscaler for a model: it scales
+// the serving Deployment between MinReplicas and MaxReplicas. A
+// target of 0 means that signal is disabled. The operator drives
+// the same decisions in-process (internal/autoscale) so the demo
+// and tests scale without a metrics server; the HPA object is what
+// a real cluster applies, and both must agree on the spec.
+type HPA struct {
+	Name      string
+	Namespace string
+	Labels    map[string]string
+	// MinReplicas / MaxReplicas are the scaling bounds from the spec.
+	MinReplicas int32
+	MaxReplicas int32
+	// TargetCPUUtilization is the average CPU percentage target (0
+	// disables CPU-based scaling).
+	TargetCPUUtilization int32
+	// TargetRequestsPerSecond is the per-pod request-rate target (0
+	// disables RPS-based scaling).
+	TargetRequestsPerSecond int32
+}
+
 // Labels returns the labels identifying a model's objects. The
 // version label lives on pod templates only, never on selectors.
 func Labels(d api.ModelDeployment) map[string]string {
@@ -176,6 +197,46 @@ func ServiceFor(d api.ModelDeployment) Service {
 		Port:       80,
 		TargetPort: d.Spec.Port,
 	}
+}
+
+// HPAFor renders the HorizontalPodAutoscaler for d, or false when
+// autoscaling is disabled — no HPA object exists then, and the
+// reconciler garbage-collects any leftover one. Callers must run
+// api.ApplyDefaults first so MinReplicas is filled in.
+func HPAFor(d api.ModelDeployment) (HPA, bool) {
+	if d.Spec.Autoscaling == nil {
+		return HPA{}, false
+	}
+	a := d.Spec.Autoscaling
+	return HPA{
+		Name:                    d.Name,
+		Namespace:               d.Namespace,
+		Labels:                  Labels(d),
+		MinReplicas:             a.MinReplicas,
+		MaxReplicas:             a.MaxReplicas,
+		TargetCPUUtilization:    a.TargetCPUUtilization,
+		TargetRequestsPerSecond: a.TargetRequestsPerSecond,
+	}, true
+}
+
+// HPADiffReasons compares the fields the reconciler manages on an
+// HPA and returns a human-readable reason per difference, or nil
+// when the live HPA already matches the desired one.
+func HPADiffReasons(desired, live HPA) []string {
+	var reasons []string
+	if desired.MinReplicas != live.MinReplicas {
+		reasons = append(reasons, fmt.Sprintf("minReplicas %d -> %d", live.MinReplicas, desired.MinReplicas))
+	}
+	if desired.MaxReplicas != live.MaxReplicas {
+		reasons = append(reasons, fmt.Sprintf("maxReplicas %d -> %d", live.MaxReplicas, desired.MaxReplicas))
+	}
+	if desired.TargetCPUUtilization != live.TargetCPUUtilization {
+		reasons = append(reasons, fmt.Sprintf("targetCPUUtilization %d -> %d", live.TargetCPUUtilization, desired.TargetCPUUtilization))
+	}
+	if desired.TargetRequestsPerSecond != live.TargetRequestsPerSecond {
+		reasons = append(reasons, fmt.Sprintf("targetRequestsPerSecond %d -> %d", live.TargetRequestsPerSecond, desired.TargetRequestsPerSecond))
+	}
+	return reasons
 }
 
 // DeploymentDiffReasons compares the fields the reconciler manages
