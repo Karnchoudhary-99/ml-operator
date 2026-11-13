@@ -58,6 +58,15 @@ func TestDeploymentFor(t *testing.T) {
 	if _, ok := got.Selector["ml-operator/version"]; ok {
 		t.Fatal("selector carries the version label")
 	}
+	// The stable selector must require canary=false, or the stable
+	// Deployment would adopt canary pods (they share the base
+	// labels the Service selects on).
+	if got.Selector["ml-operator/canary"] != "false" {
+		t.Fatalf("stable selector missing canary=false: %v", got.Selector)
+	}
+	if got.Labels["ml-operator/canary"] != "false" {
+		t.Fatalf("stable pod labels missing canary=false: %v", got.Labels)
+	}
 	if got.Labels["ml-operator/version"] != "v2" {
 		t.Fatalf("pod labels missing version: %v", got.Labels)
 	}
@@ -72,13 +81,15 @@ func TestServiceFor(t *testing.T) {
 	if got.Name != "iris-mlp" || got.Port != 80 || got.TargetPort != 8080 {
 		t.Fatalf("service wrong: %+v", got)
 	}
-	// The Service selects stable pods only — same selector as the
-	// stable Deployment, no version, no canary label.
+	// The Service selector is the base selector — no canary label —
+	// so during a canary rollout it matches both stable and canary
+	// pods and traffic splits by ready-pod count. The canary label
+	// lives on the Deployments' selectors, not the Service's.
 	if got.Selector["app.kubernetes.io/name"] != "iris-mlp" {
 		t.Fatalf("service selector wrong: %v", got.Selector)
 	}
 	if _, ok := got.Selector["ml-operator/canary"]; ok {
-		t.Fatal("service selector matches canary pods")
+		t.Fatal("service selector must not carry the canary label (it selects both pod sets)")
 	}
 }
 
@@ -119,6 +130,27 @@ func TestCanaryDeploymentFor(t *testing.T) {
 	d2.Spec.Canary = &api.CanarySpec{Weight: 50}
 	if got := CanaryDeploymentFor(d2); got.Replicas != 2 {
 		t.Fatalf("50%% canary of 4: replicas = %d, want 2", got.Replicas)
+	}
+}
+
+func TestCanaryDeploymentForWeight(t *testing.T) {
+	d := dep() // 3 replicas
+	d.Spec.Strategy = api.StrategyCanary
+	d.Spec.Canary = &api.CanarySpec{Weight: 25, Steps: 4, IntervalSeconds: 30}
+	api.ApplyDefaults(&d)
+
+	// An explicit weight overrides the spec weight: 100% of 3 is 3.
+	if got := CanaryDeploymentForWeight(d, 100); got.Replicas != 3 {
+		t.Fatalf("weight 100: replicas = %d, want 3", got.Replicas)
+	}
+	// 10% of 3 rounds to 1.
+	if got := CanaryDeploymentForWeight(d, 10); got.Replicas != 1 {
+		t.Fatalf("weight 10: replicas = %d, want 1", got.Replicas)
+	}
+	// The explicit-weight render still carries the canary identity.
+	got := CanaryDeploymentForWeight(d, 50)
+	if !got.Canary || got.Labels["ml-operator/canary"] != "true" || got.Selector["ml-operator/canary"] != "true" {
+		t.Fatalf("explicit-weight canary identity wrong: %+v", got)
 	}
 }
 

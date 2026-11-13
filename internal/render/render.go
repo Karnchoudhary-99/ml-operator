@@ -11,6 +11,7 @@ import (
 	"sort"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
+	"github.com/Karnchoudhary-99/ml-operator/internal/rollout"
 )
 
 // ManagedBy is the label value marking every object this operator owns.
@@ -98,50 +99,74 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 	}
 	labels := Labels(d)
 	labels["ml-operator/version"] = d.Spec.Model.Version
+	// Stable pods carry canary=false and the selector requires it,
+	// so the stable Deployment can never adopt canary pods: the two
+	// Deployments' selectors are disjoint even though both share
+	// the base labels the Service selects on.
+	labels["ml-operator/canary"] = "false"
 	return Deployment{
 		Name:      d.Name,
 		Namespace: d.Namespace,
 		Replicas:  replicas,
 		Labels:    labels,
-		Selector:  Selector(d),
+		Selector:  deploymentSelector(d, "false"),
 		Canary:    false,
 		Container: containerFor(d),
 	}
 }
 
 // CanaryDeploymentFor renders the small canary Deployment for a
-// canary rollout: same image and container as the stable Deployment,
-// but named "<name>-canary", labelled as a canary, and sized to the
-// rollout weight (at least 1 replica). The stable Service selector
-// never matches canary pods, so no traffic reaches the canary until
-// the rollout session adds traffic shifting.
+// canary rollout at the weight from the spec (default 10%): same
+// image and container as the stable Deployment, but named
+// "<name>-canary", labelled as a canary, and sized to the rollout
+// weight (at least 1 replica). The canary Deployment selects
+// canary pods only; the stable Deployment selects stable pods only.
+// The Service selector matches both, so traffic splits by ready-pod
+// count — the weight ladder in internal/rollout is the traffic
+// split, and promotion folds the new image into the stable
+// Deployment and deletes the canary.
 func CanaryDeploymentFor(d api.ModelDeployment) Deployment {
-	dep := DeploymentFor(d)
 	weight := int32(10)
 	if d.Spec.Canary != nil && d.Spec.Canary.Weight > 0 {
 		weight = d.Spec.Canary.Weight
 	}
-	replicas := int32(1)
+	return CanaryDeploymentForWeight(d, weight)
+}
+
+// CanaryDeploymentForWeight renders the canary Deployment at an
+// explicit traffic weight, for the controller stepping a rollout
+// along its weight ladder. The weight sizes the canary by
+// rollout.CanaryReplicas, so the rendered replica count and the
+// rollout state can never disagree.
+func CanaryDeploymentForWeight(d api.ModelDeployment, weight int32) Deployment {
+	dep := DeploymentFor(d)
+	total := int32(1)
 	if d.Spec.Replicas != nil {
-		// Round to nearest, minimum 1: a 10% canary of 4 replicas is 1.
-		replicas = (*d.Spec.Replicas*weight + 50) / 100
-		if replicas < 1 {
-			replicas = 1
-		}
+		total = *d.Spec.Replicas
 	}
 	dep.Name = d.Name + "-canary"
-	dep.Replicas = replicas
+	dep.Replicas = rollout.CanaryReplicas(total, weight)
 	dep.Canary = true
 	dep.Labels["ml-operator/canary"] = "true"
-	// The canary Deployment selects canary pods only; the stable
-	// Deployment's selector excludes the label, so neither adopts
-	// the other's pods.
-	dep.Selector["ml-operator/canary"] = "true"
+	dep.Selector = deploymentSelector(d, "true")
 	return dep
+}
+
+// deploymentSelector is the Deployment selector for a model's pods:
+// the base selector plus the canary label, so the stable and canary
+// Deployments never select each other's pods.
+func deploymentSelector(d api.ModelDeployment, canary string) map[string]string {
+	sel := Selector(d)
+	sel["ml-operator/canary"] = canary
+	return sel
 }
 
 // ServiceFor renders the ClusterIP Service fronting d. Clients
 // connect on port 80; traffic is forwarded to the container port.
+// The selector is the base selector (no canary label), so during a
+// canary rollout it matches both stable and canary pods and traffic
+// splits by ready-pod count — the weight ladder in internal/rollout
+// sizes the canary, which is what sets the split.
 func ServiceFor(d api.ModelDeployment) Service {
 	return Service{
 		Name:       d.Name,
