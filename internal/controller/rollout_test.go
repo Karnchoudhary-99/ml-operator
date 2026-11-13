@@ -305,3 +305,91 @@ func TestReconcileCanaryGateUsesSpecThresholds(t *testing.T) {
 		})
 	}
 }
+
+// TestReconcileRecordsPreviousImage proves the reconciler remembers
+// the replaced image in status — on a canary promotion and on a
+// direct rolling update — and keeps it across later reconciles that
+// change nothing.
+func TestReconcileRecordsPreviousImage(t *testing.T) {
+	previous := func(t *testing.T, reg *registry.Registry) (string, string) {
+		t.Helper()
+		e := reg.Get("default/iris-mlp")
+		if e == nil {
+			t.Fatal("deployment left the registry")
+		}
+		return e.Deployment.Status.PreviousImage, e.Deployment.Status.PreviousVersion
+	}
+
+	t.Run("promote records previous", func(t *testing.T) {
+		reg, cluster, rec := setup(t)
+		availableV1(t, reg, cluster, rec)
+		now := time.Now()
+		rec.Now = func() time.Time { return now }
+		reg.Register(canaryDep(2, 10, 2, 30))
+		if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+			t.Fatal(err)
+		}
+		cluster.SetReady("default/iris-mlp-canary", 1)
+		now = now.Add(31 * time.Second)
+		if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(31 * time.Second)
+		if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+			t.Fatal(err)
+		}
+		cluster.SetReady("default/iris-mlp-canary", 2)
+		now = now.Add(31 * time.Second)
+		res, err := rec.Reconcile("default/iris-mlp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Phase != api.PhaseAvailable {
+			t.Fatalf("promote: phase=%s, want Available", res.Phase)
+		}
+		if img, ver := previous(t, reg); img != "registry.example.com/iris-mlp:v1" || ver != "v1" {
+			t.Fatalf("previous = %q (%q), want v1 image/version", img, ver)
+		}
+		// A later reconcile that changes nothing keeps it.
+		if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+			t.Fatal(err)
+		}
+		if img, ver := previous(t, reg); img != "registry.example.com/iris-mlp:v1" || ver != "v1" {
+			t.Fatalf("previous after no-op reconcile = %q (%q), want v1", img, ver)
+		}
+	})
+
+	t.Run("rolling update records previous", func(t *testing.T) {
+		reg, cluster, rec := setup(t)
+		availableV1(t, reg, cluster, rec)
+		v2 := dep("iris-mlp", 2)
+		v2.Spec.Model.Image = "registry.example.com/iris-mlp:v2"
+		v2.Spec.Model.Version = "v2"
+		reg.Register(v2)
+		if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+			t.Fatal(err)
+		}
+		cluster.SetReady("default/iris-mlp", 2)
+		res, err := rec.Reconcile("default/iris-mlp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Phase != api.PhaseAvailable {
+			t.Fatalf("phase=%s, want Available", res.Phase)
+		}
+		if img, ver := previous(t, reg); img != "registry.example.com/iris-mlp:v1" || ver != "v1" {
+			t.Fatalf("previous = %q (%q), want v1 image/version", img, ver)
+		}
+	})
+
+	t.Run("first creation records nothing", func(t *testing.T) {
+		reg, _, rec := setup(t)
+		reg.Register(dep("iris-mlp", 1))
+		if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+			t.Fatal(err)
+		}
+		if img, ver := previous(t, reg); img != "" || ver != "" {
+			t.Fatalf("previous = %q (%q), want empty on first creation", img, ver)
+		}
+	})
+}

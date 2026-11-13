@@ -294,3 +294,86 @@ func TestVersionAndUnknownCommand(t *testing.T) {
 		t.Fatalf("no command should fail")
 	}
 }
+
+const irisV2Canary = `
+name: iris-mlp
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v2
+    framework: onnx
+    version: v2
+  replicas: 2
+  strategy: Canary
+  canary:
+    weight: 10
+    steps: 0
+    intervalSeconds: 1
+`
+
+func TestRollbackFlow(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+
+	// v1 applied and available.
+	manifest := writeManifest(t, irisV1)
+	if code, out, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply v1 exit %d, out %q", code, out)
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready exit %d", code)
+	}
+
+	// Nothing has replaced v1 yet: rollback refuses.
+	if code, _, errOut := runCLIState(t, state, "rollback", "iris-mlp"); code == 0 {
+		t.Fatal("rollback with no previous version succeeded")
+	} else if !strings.Contains(errOut, "no previous version") {
+		t.Fatalf("rollback error %q, want 'no previous version'", errOut)
+	}
+
+	// Canary v2, then promote it (the tour's timings: 1s step).
+	canary := writeManifest(t, irisV2Canary)
+	if code, out, _ := runCLIState(t, state, "apply", "-f", canary); code != 0 {
+		t.Fatalf("apply canary exit %d, out %q", code, out)
+	}
+	// 2 ready, as in the tour: the canary is 1 replica at 10% and 2 at
+	// 100%, so 2 ready passes the gate at both weights.
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2", "--canary"); code != 0 {
+		t.Fatalf("ready canary exit %d", code)
+	}
+	time.Sleep(2 * time.Second)
+	if code, out, _ := runCLIState(t, state, "rollout", "status", "iris-mlp"); code != 0 || !strings.Contains(out, "weight 100%") {
+		t.Fatalf("rollout status exit %d, out %q", code, out)
+	}
+	time.Sleep(2 * time.Second)
+	if code, out, _ := runCLIState(t, state, "rollout", "status", "iris-mlp"); code != 0 || !strings.Contains(out, "state:      promoted") {
+		t.Fatalf("rollout promote exit %d, out %q", code, out)
+	}
+
+	// Status shows v2 live and v1 as the rollback target.
+	if code, out, _ := runCLIState(t, state, "status", "iris-mlp"); code != 0 ||
+		!strings.Contains(out, "registry.example.com/iris-mlp:v2") ||
+		!strings.Contains(out, "previous:   registry.example.com/iris-mlp:v1 (v1)") {
+		t.Fatalf("status after promote exit %d, out %q", code, out)
+	}
+
+	// Roll back: a new generation serving v1 again.
+	if code, out, _ := runCLIState(t, state, "rollback", "iris-mlp"); code != 0 ||
+		!strings.Contains(out, "rolled back default/iris-mlp (generation 3)") ||
+		!strings.Contains(out, "now serving registry.example.com/iris-mlp:v1 (v1)") {
+		t.Fatalf("rollback exit %d, out %q", code, out)
+	}
+	if code, out, _ := runCLIState(t, state, "status", "iris-mlp"); code != 0 ||
+		!strings.Contains(out, "registry.example.com/iris-mlp:v1") {
+		t.Fatalf("status after rollback exit %d, out %q", code, out)
+	}
+	// The rollback itself has not promoted yet, so there is no
+	// newer previous version: a second rollback refuses.
+	if code, _, errOut := runCLIState(t, state, "rollback", "iris-mlp"); code == 0 {
+		t.Fatal("second rollback succeeded with nothing new to restore")
+	} else if !strings.Contains(errOut, "already serves the previous version") {
+		t.Fatalf("second rollback error %q", errOut)
+	}
+	// The rollback is in the event log.
+	if code, out, _ := runCLIState(t, state, "logs", "iris-mlp"); code != 0 || !strings.Contains(out, "RolledBack") {
+		t.Fatalf("logs exit %d, out %q", code, out)
+	}
+}
