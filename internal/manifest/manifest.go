@@ -160,7 +160,7 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 		if !ok {
 			return fmt.Errorf("spec.canary: must be a mapping")
 		}
-		if err := checkKeys(c, []string{"weight", "steps", "intervalSeconds"}, "spec.canary"); err != nil {
+		if err := checkKeys(c, []string{"weight", "steps", "intervalSeconds", "gate"}, "spec.canary"); err != nil {
 			return err
 		}
 		cs := &api.CanarySpec{}
@@ -184,6 +184,38 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 				return err
 			}
 			cs.IntervalSeconds = int32(n)
+		}
+		if raw, ok := c["gate"]; ok {
+			g, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("spec.canary.gate: must be a mapping")
+			}
+			if err := checkKeys(g, []string{"maxErrorRate", "maxP95LatencyMs", "minReadyRatio"}, "spec.canary.gate"); err != nil {
+				return err
+			}
+			gs := &api.GateSpec{}
+			if v, ok := g["maxErrorRate"]; ok {
+				f, err := floatField(v, "spec.canary.gate.maxErrorRate")
+				if err != nil {
+					return err
+				}
+				gs.MaxErrorRate = f
+			}
+			if v, ok := g["maxP95LatencyMs"]; ok {
+				f, err := floatField(v, "spec.canary.gate.maxP95LatencyMs")
+				if err != nil {
+					return err
+				}
+				gs.MaxP95LatencyMs = f
+			}
+			if v, ok := g["minReadyRatio"]; ok {
+				f, err := floatField(v, "spec.canary.gate.minReadyRatio")
+				if err != nil {
+					return err
+				}
+				gs.MinReadyRatio = f
+			}
+			cs.Gate = gs
 		}
 		s.Canary = cs
 	}
@@ -305,6 +337,26 @@ func intField(raw any, path string) (int64, error) {
 			return 0, fmt.Errorf("%s: must be a number, got %q", path, v)
 		}
 		return n, nil
+	default:
+		return 0, fmt.Errorf("%s: must be a number", path)
+	}
+}
+
+// floatField reads a fractional-number field. YAML floats arrive as
+// float64, YAML/JSON whole numbers as int64 or float64; all are
+// accepted. Strings parse as floats, so JSON-style "0.05" works too.
+func floatField(raw any, path string) (float64, error) {
+	switch v := raw.(type) {
+	case float64:
+		return v, nil
+	case int64:
+		return float64(v), nil
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, fmt.Errorf("%s: must be a number, got %q", path, v)
+		}
+		return f, nil
 	default:
 		return 0, fmt.Errorf("%s: must be a number", path)
 	}
