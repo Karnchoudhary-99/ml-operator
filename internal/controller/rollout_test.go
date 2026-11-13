@@ -214,3 +214,94 @@ func TestReconcileCanaryRolloutAborts(t *testing.T) {
 		t.Fatalf("stable image = %s after re-reconcile, want v1", got.Container.Image)
 	}
 }
+
+// TestReconcileCanaryGateUsesSpecThresholds proves the reconciler
+// judges a canary by its own spec's gate, not the old hardcoded
+// 5% / 500ms defaults: the same 10% error rate promotes under a
+// lenient 20% gate, aborts under the default gate (nil gate), and
+// aborts under a strict 1% gate.
+func TestReconcileCanaryGateUsesSpecThresholds(t *testing.T) {
+	// Drive one failing-gate reconcile; the caller sets readiness
+	// and metrics first. Returns the reconcile result.
+	drive := func(t *testing.T, rec *Reconciler) Result {
+		t.Helper()
+		res, err := rec.Reconcile("default/iris-mlp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	// Abort asserts the terminal aborted state after 3 failures.
+	assertAborted := func(t *testing.T, cluster *FakeCluster, res Result) {
+		t.Helper()
+		if res.Phase != api.PhaseDegraded || res.Requeue {
+			t.Fatalf("phase=%s requeue=%v, want Degraded/false", res.Phase, res.Requeue)
+		}
+		if _, ok := cluster.GetDeployment("default/iris-mlp-canary"); ok {
+			t.Fatal("canary Deployment was not deleted on abort")
+		}
+		if got, _ := cluster.GetDeployment("default/iris-mlp"); got.Container.Image != "registry.example.com/iris-mlp:v1" {
+			t.Fatalf("stable image = %s, want v1 after abort", got.Container.Image)
+		}
+	}
+
+	t.Run("lenient gate promotes", func(t *testing.T) {
+		reg, cluster, rec := setup(t)
+		availableV1(t, reg, cluster, rec)
+		// Controllable clock: ApplyDefaults turns a 0 interval
+		// into the 30s default, so steps wait out 30s.
+		now := time.Now()
+		rec.Now = func() time.Time { return now }
+		// Weight 50 of 2 replicas -> 1 canary replica; steps 0
+		// means one jump to 100% after the gate passes.
+		d := canaryDep(2, 50, 0, 0)
+		d.Spec.Canary.Gate = &api.GateSpec{MaxErrorRate: 0.20, MaxP95LatencyMs: 500, MinReadyRatio: 1.0}
+		reg.Register(d)
+		drive(t, rec) // creates the canary (pending: 0 ready)
+		cluster.SetReady("default/iris-mlp-canary", 1)
+		cluster.SetMetrics("default/iris-mlp-canary", ClusterMetrics{ErrorRate: 0.10})
+		// 10% errors pass the lenient 20% gate, and the step
+		// interval has elapsed: advance to 100%.
+		now = now.Add(31 * time.Second)
+		res := drive(t, rec)
+		if res.Phase != api.PhaseProgressing || !res.Requeue {
+			t.Fatalf("advance: phase=%s requeue=%v, want Progressing/true", res.Phase, res.Requeue)
+		}
+		// The canary grew to 2 replicas at 100%; bring both up.
+		cluster.SetReady("default/iris-mlp-canary", 2)
+		cluster.SetReady("default/iris-mlp", 2)
+		res = drive(t, rec)
+		if res.Phase != api.PhaseAvailable {
+			t.Fatalf("promote: phase=%s, want Available", res.Phase)
+		}
+		if got, _ := cluster.GetDeployment("default/iris-mlp"); got.Container.Image != "registry.example.com/iris-mlp:v2" {
+			t.Fatalf("stable image = %s, want v2 after promote", got.Container.Image)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		gate *api.GateSpec // nil means "no gate in the spec"
+	}{
+		{"default gate aborts", nil},
+		{"strict gate aborts", &api.GateSpec{MaxErrorRate: 0.01, MaxP95LatencyMs: 500, MinReadyRatio: 1.0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg, cluster, rec := setup(t)
+			availableV1(t, reg, cluster, rec)
+			d := canaryDep(2, 50, 0, 0)
+			d.Spec.Canary.Gate = tc.gate
+			reg.Register(d)
+			drive(t, rec) // creates the canary (pending: 0 ready)
+			cluster.SetReady("default/iris-mlp-canary", 1)
+			cluster.SetMetrics("default/iris-mlp-canary", ClusterMetrics{ErrorRate: 0.10})
+			// Three consecutive gate failures abort: 10% errors
+			// beat both the 5% default and the 1% strict gate.
+			var res Result
+			for i := 0; i < 3; i++ {
+				res = drive(t, rec)
+			}
+			assertAborted(t, cluster, res)
+		})
+	}
+}

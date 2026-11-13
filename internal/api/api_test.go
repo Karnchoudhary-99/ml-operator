@@ -60,6 +60,22 @@ func TestValidateRejects(t *testing.T) {
 			d.Spec.Strategy = StrategyCanary
 			d.Spec.Canary = &CanarySpec{Weight: 100}
 		}, "canary.weight"},
+		{"gate error rate over 1", func(d *ModelDeployment) {
+			d.Spec.Strategy = StrategyCanary
+			d.Spec.Canary = &CanarySpec{Weight: 10, Gate: &GateSpec{MaxErrorRate: 1.5}}
+		}, "maxErrorRate"},
+		{"gate error rate negative", func(d *ModelDeployment) {
+			d.Spec.Strategy = StrategyCanary
+			d.Spec.Canary = &CanarySpec{Weight: 10, Gate: &GateSpec{MaxErrorRate: -0.1}}
+		}, "maxErrorRate"},
+		{"gate latency negative", func(d *ModelDeployment) {
+			d.Spec.Strategy = StrategyCanary
+			d.Spec.Canary = &CanarySpec{Weight: 10, Gate: &GateSpec{MaxP95LatencyMs: -5}}
+		}, "maxP95LatencyMs"},
+		{"gate ready ratio over 1", func(d *ModelDeployment) {
+			d.Spec.Strategy = StrategyCanary
+			d.Spec.Canary = &CanarySpec{Weight: 10, Gate: &GateSpec{MinReadyRatio: 1.2}}
+		}, "minReadyRatio"},
 		{"autoscaling min over max", func(d *ModelDeployment) {
 			d.Spec.Autoscaling = &AutoscalingSpec{MinReplicas: 5, MaxReplicas: 2, TargetCPUUtilization: 80}
 		}, "minReplicas"},
@@ -196,5 +212,45 @@ func TestKey(t *testing.T) {
 	d.Namespace = "prod"
 	if d.Key() != "prod/iris-mlp" {
 		t.Fatalf("Key() = %q, want prod/iris-mlp", d.Key())
+	}
+}
+
+func TestApplyDefaultsGateThresholds(t *testing.T) {
+	canary := func(gate *GateSpec) *ModelDeployment {
+		d := validDeployment()
+		d.Spec.Strategy = StrategyCanary
+		d.Spec.Canary = &CanarySpec{Weight: 10, Steps: 1, Gate: gate}
+		return d
+	}
+
+	// No gate at all: the full default set.
+	d := canary(nil)
+	ApplyDefaults(d)
+	if d.Spec.Canary.Gate == nil {
+		t.Fatal("nil gate after ApplyDefaults")
+	}
+	if g := d.Spec.Canary.Gate; g.MaxErrorRate != DefaultGateMaxErrorRate || g.MaxP95LatencyMs != DefaultGateMaxP95LatencyMs || g.MinReadyRatio != DefaultGateMinReadyRatio {
+		t.Fatalf("default gate = %+v", g)
+	}
+
+	// A partial gate keeps the user's value and fills the rest.
+	d = canary(&GateSpec{MaxErrorRate: 0.2})
+	ApplyDefaults(d)
+	if g := d.Spec.Canary.Gate; g.MaxErrorRate != 0.2 || g.MaxP95LatencyMs != DefaultGateMaxP95LatencyMs || g.MinReadyRatio != DefaultGateMinReadyRatio {
+		t.Fatalf("partial gate = %+v", g)
+	}
+
+	// A full custom gate is left alone.
+	d = canary(&GateSpec{MaxErrorRate: 0.01, MaxP95LatencyMs: 200, MinReadyRatio: 0.5})
+	ApplyDefaults(d)
+	if g := d.Spec.Canary.Gate; g.MaxErrorRate != 0.01 || g.MaxP95LatencyMs != 200 || g.MinReadyRatio != 0.5 {
+		t.Fatalf("custom gate overwritten: %+v", g)
+	}
+
+	// A non-canary strategy never gains a gate.
+	d = validDeployment()
+	ApplyDefaults(d)
+	if d.Spec.Canary != nil {
+		t.Fatalf("rolling deployment gained a canary spec: %+v", d.Spec.Canary)
 	}
 }

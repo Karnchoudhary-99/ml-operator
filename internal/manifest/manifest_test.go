@@ -78,6 +78,40 @@ func TestParseFullYAML(t *testing.T) {
 	}
 }
 
+func TestParseCanaryGate(t *testing.T) {
+	doc := "name: iris-mlp\nspec:\n  model:\n    image: img:v2\n  strategy: Canary\n  canary:\n    weight: 10\n    steps: 0\n    intervalSeconds: 5\n    gate:\n      maxErrorRate: 0.02\n      maxP95LatencyMs: 250\n      minReadyRatio: 0.8\n"
+	d, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if d.Spec.Canary == nil || d.Spec.Canary.Gate == nil {
+		t.Fatalf("gate not parsed: %+v", d.Spec.Canary)
+	}
+	g := d.Spec.Canary.Gate
+	if g.MaxErrorRate != 0.02 || g.MaxP95LatencyMs != 250 || g.MinReadyRatio != 0.8 {
+		t.Fatalf("gate = %+v", g)
+	}
+
+	// A gate block with only one threshold parses; the rest is
+	// ApplyDefaults' job, not the parser's.
+	d, err = Parse([]byte("name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate:\n      maxErrorRate: 0.1\n"))
+	if err != nil {
+		t.Fatalf("Parse partial gate: %v", err)
+	}
+	if g := d.Spec.Canary.Gate; g.MaxErrorRate != 0.1 || g.MaxP95LatencyMs != 0 || g.MinReadyRatio != 0 {
+		t.Fatalf("partial gate = %+v", g)
+	}
+
+	// Whole-number thresholds (JSON numbers) parse as floats.
+	d, err = Parse([]byte(`{"name":"x","spec":{"strategy":"Canary","canary":{"weight":10,"gate":{"maxP95LatencyMs":250}}}}`))
+	if err != nil {
+		t.Fatalf("Parse JSON gate: %v", err)
+	}
+	if g := d.Spec.Canary.Gate; g.MaxP95LatencyMs != 250 {
+		t.Fatalf("JSON gate = %+v", g)
+	}
+}
+
 func TestParseMinimalYAML(t *testing.T) {
 	d, err := Parse([]byte("name: tiny\nspec:\n  model:\n    image: img:v1\n"))
 	if err != nil {
@@ -114,6 +148,9 @@ func TestParseErrors(t *testing.T) {
 		{"unknown model key", "name: x\nspec:\n  model:\n    image: i\n    bogus: 1\n", "unknown key"},
 		{"bad replicas type", "name: x\nspec:\n  replicas: many\n", "must be a number"},
 		{"fractional replicas", "name: x\nspec:\n  replicas: 1.5\n", "must be a number"},
+		{"unknown gate key", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate:\n      bogus: 1\n", "unknown key"},
+		{"gate not a map", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate: 5\n", "must be a mapping"},
+		{"bad gate value", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate:\n      maxErrorRate: high\n", "must be a number"},
 		{"spec not a map", "name: x\nspec: 5\n", "must be a mapping"},
 		{"env value not string", "name: x\nspec:\n  env:\n    N: 3\n", "must be a string"},
 		{"list rejected", "name: x\nspec:\n  - a\n", "lists are not supported"},
