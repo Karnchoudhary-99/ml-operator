@@ -36,7 +36,10 @@ func (f *FakeCluster) GetDeployment(key string) (render.Deployment, bool) {
 
 // ApplyDeployment implements Cluster. A newly applied Deployment
 // starts with 0 ready replicas — pods take time to come up — until
-// the test (or demo) calls SetReady.
+// the test (or demo) calls SetReady. Re-applying an existing
+// Deployment does NOT reset readiness: the fake does not simulate
+// pod restarts, so a test that needs a readiness drop after an
+// update must call SetReady explicitly.
 func (f *FakeCluster) ApplyDeployment(d render.Deployment) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
