@@ -150,6 +150,100 @@ func (f *FakeCluster) SetReady(key string, ready int32) {
 	}
 }
 
+// ClusterSnapshot is the persistable state of a FakeCluster: every
+// object it holds plus the readiness and load observations. The mlop
+// CLI saves it to the state file so separate invocations share one
+// simulated cluster. All maps are deep-copied on snapshot and
+// restore, so later applies never corrupt a saved snapshot.
+type ClusterSnapshot struct {
+	Deployments map[string]render.Deployment
+	Services    map[string]render.Service
+	HPAs        map[string]render.HPA
+	Metrics     map[string]ClusterMetrics
+	Ready       map[string]int32
+}
+
+// Snapshot returns a deep copy of the cluster's current state.
+func (f *FakeCluster) Snapshot() ClusterSnapshot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	snap := ClusterSnapshot{
+		Deployments: make(map[string]render.Deployment, len(f.deployments)),
+		Services:    make(map[string]render.Service, len(f.services)),
+		HPAs:        make(map[string]render.HPA, len(f.hpas)),
+		Metrics:     make(map[string]ClusterMetrics, len(f.metrics)),
+		Ready:       make(map[string]int32, len(f.ready)),
+	}
+	for k, v := range f.deployments {
+		snap.Deployments[k] = v
+	}
+	for k, v := range f.services {
+		snap.Services[k] = v
+	}
+	for k, v := range f.hpas {
+		snap.HPAs[k] = v
+	}
+	for k, v := range f.metrics {
+		snap.Metrics[k] = v
+	}
+	for k, v := range f.ready {
+		snap.Ready[k] = v
+	}
+	return snap
+}
+
+// Restore replaces the cluster's state with a snapshot loaded from
+// the state file. Nil maps in the snapshot become empty maps.
+func (f *FakeCluster) Restore(snap ClusterSnapshot) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deployments = copyDeploymentMap(snap.Deployments)
+	f.services = copyServiceMap(snap.Services)
+	f.hpas = copyHPAMap(snap.HPAs)
+	f.metrics = copyMetricsMap(snap.Metrics)
+	f.ready = copyReadyMap(snap.Ready)
+}
+
+func copyDeploymentMap(in map[string]render.Deployment) map[string]render.Deployment {
+	out := make(map[string]render.Deployment, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyServiceMap(in map[string]render.Service) map[string]render.Service {
+	out := make(map[string]render.Service, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyHPAMap(in map[string]render.HPA) map[string]render.HPA {
+	out := make(map[string]render.HPA, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyMetricsMap(in map[string]ClusterMetrics) map[string]ClusterMetrics {
+	out := make(map[string]ClusterMetrics, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyReadyMap(in map[string]int32) map[string]int32 {
+	out := make(map[string]int32, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 // DeploymentCount returns how many Deployments the fake currently holds.
 func (f *FakeCluster) DeploymentCount() int {
 	f.mu.Lock()
