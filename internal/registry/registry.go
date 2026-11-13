@@ -56,20 +56,23 @@ func New() *Registry {
 }
 
 // Register inserts a new deployment or updates an existing one. It
-// returns the entry and whether the key already existed. A
-// re-registration with an unchanged generation is a no-op for the
-// entry but still bumps the global revision and notifies watchers
-// only when the spec actually changed.
+// returns the entry and whether the key already existed.
+// Re-registering an identical deployment (same spec and generation)
+// is a no-op: no revision bump, no event.
 func (r *Registry) Register(d api.ModelDeployment) (*Entry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	key := d.Key()
 	existing, ok := r.entries[key]
-	changed := true
 	if ok {
-		changed = !specsEqual(existing.Deployment.Spec, d.Spec) ||
-			existing.Deployment.Generation != d.Generation
+		// Identical spec and generation: a true no-op — no revision
+		// bump, no event. Re-registration is idempotent.
+		if specsEqual(existing.Deployment.Spec, d.Spec) &&
+			existing.Deployment.Generation == d.Generation {
+			snapshot := *existing
+			return &snapshot, true
+		}
 		existing.Deployment = d
 		existing.Revision++
 	} else {
@@ -83,7 +86,7 @@ func (r *Registry) Register(d api.ModelDeployment) (*Entry, bool) {
 		typ = EventModified
 	}
 	rev := r.revision
-	r.notifyLocked(Event{Type: typ, Deployment: snapshot.Deployment, Revision: rev}, changed)
+	r.notifyLocked(Event{Type: typ, Deployment: snapshot.Deployment, Revision: rev}, true)
 	return &snapshot, ok
 }
 
@@ -163,9 +166,9 @@ func (r *Registry) Watch() (<-chan Event, func()) {
 	}
 }
 
-// notifyLocked broadcasts an event. Callers must hold r.mu. When
-// changed is false the event is skipped entirely (no-op
-// re-registration).
+// notifyLocked broadcasts an event. Callers must hold r.mu. The
+// changed flag is always true at the call sites; it exists so a
+// future caller can skip no-op notifications.
 func (r *Registry) notifyLocked(ev Event, changed bool) {
 	if !changed {
 		return
