@@ -70,7 +70,7 @@ func (r *Registry) Register(d api.ModelDeployment) (*Entry, bool) {
 	if ok {
 		// Identical spec and generation: a true no-op — no revision
 		// bump, no event. Re-registration is idempotent.
-		if specsEqual(existing.Deployment.Spec, d.Spec) &&
+		if SpecsEqual(existing.Deployment.Spec, d.Spec) &&
 			existing.Deployment.Generation == d.Generation {
 			snapshot := *existing
 			return &snapshot, true
@@ -209,9 +209,10 @@ func (r *Registry) notifyLocked(ev Event, changed bool) {
 	}
 }
 
-// specsEqual reports whether two specs are identical. It compares the
+// SpecsEqual reports whether two specs are identical. It compares the
 // fields the reconciler cares about; Env maps are compared by content.
-func specsEqual(a, b api.ModelDeploymentSpec) bool {
+// The mlop CLI uses it too, to decide whether an apply changed anything.
+func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.Model != b.Model || a.Resources != b.Resources || a.Health != b.Health {
 		return false
 	}
