@@ -58,7 +58,9 @@ func New() *Registry {
 // Register inserts a new deployment or updates an existing one. It
 // returns the entry and whether the key already existed.
 // Re-registering an identical deployment (same spec and generation)
-// is a no-op: no revision bump, no event.
+// is a no-op: no revision bump, no event. Status-only changes do NOT
+// go through Register (they would be dropped by the no-op check) —
+// use UpdateStatus for those.
 func (r *Registry) Register(d api.ModelDeployment) (*Entry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -116,6 +118,26 @@ func (r *Registry) List() []*Entry {
 		out = append(out, &snapshot)
 	}
 	return out
+}
+
+// UpdateStatus replaces the status of the deployment at key without
+// touching its spec or generation, and returns false when the key is
+// not present. A status write bumps the global revision and emits a
+// Modified event, so watchers (including the reconciler's status
+// loop) observe phase transitions. It is the only way to write
+// status: Register ignores status-only re-registrations by design.
+func (r *Registry) UpdateStatus(key string, status api.ModelDeploymentStatus) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[key]
+	if !ok {
+		return false
+	}
+	e.Deployment.Status = status
+	r.revision++
+	snapshot := *e
+	r.notifyLocked(Event{Type: EventModified, Deployment: snapshot.Deployment, Revision: r.revision}, true)
+	return true
 }
 
 // Delete removes the entry for key. It returns the removed entry, or
