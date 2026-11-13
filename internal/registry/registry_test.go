@@ -164,3 +164,58 @@ func TestConcurrentRegister(t *testing.T) {
 		t.Fatal("model missing after concurrent registers")
 	}
 }
+
+func TestUpdateStatus(t *testing.T) {
+	r := New()
+	d := dep("model", "default", 1)
+	r.Register(d)
+	revBefore := r.Revision()
+
+	ch, unsub := r.Watch()
+	defer unsub()
+
+	status := api.ModelDeploymentStatus{
+		Phase:              api.PhaseAvailable,
+		ReadyReplicas:      2,
+		ObservedGeneration: 1,
+		Message:            "2/2 replicas ready",
+	}
+	if !r.UpdateStatus("default/model", status) {
+		t.Fatal("UpdateStatus returned false for a registered key")
+	}
+	if r.Revision() != revBefore+1 {
+		t.Fatalf("revision = %d, want %d", r.Revision(), revBefore+1)
+	}
+	got := r.Get("default/model")
+	if got == nil {
+		t.Fatal("model missing after UpdateStatus")
+	}
+	if got.Deployment.Status.Phase != api.PhaseAvailable || got.Deployment.Status.ReadyReplicas != 2 {
+		t.Fatalf("status not stored: %+v", got.Deployment.Status)
+	}
+	// Spec and generation must be untouched by a status write.
+	if got.Deployment.Spec.Model.Image != "img:model" || got.Deployment.Generation != 1 {
+		t.Fatalf("status write touched spec/generation: %+v", got.Deployment)
+	}
+	// The entry revision is unchanged: only the global revision moves.
+	if got.Revision != 1 {
+		t.Fatalf("entry revision = %d, want 1", got.Revision)
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventModified || ev.Deployment.Status.Phase != api.PhaseAvailable {
+			t.Fatalf("unexpected status event: %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no Modified event for UpdateStatus")
+	}
+
+	// Unknown key: false, no revision bump, no event.
+	if r.UpdateStatus("default/nope", status) {
+		t.Fatal("UpdateStatus returned true for an unknown key")
+	}
+	if r.Revision() != revBefore+1 {
+		t.Fatalf("revision moved on unknown-key UpdateStatus: %d", r.Revision())
+	}
+}

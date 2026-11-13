@@ -17,14 +17,24 @@ func main() {
 		showVersion bool
 		namespace   string
 		metricsAddr string
+		demo        bool
 	)
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&namespace, "namespace", "default", "namespace to watch for ModelDeployments")
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "address for the metrics endpoint")
+	flag.BoolVar(&demo, "demo", false, "run the reconciler demo against the in-memory fake cluster and exit")
 	flag.Parse()
 
 	if showVersion {
 		fmt.Printf("ml-operator %s\n", version)
+		return
+	}
+
+	if demo {
+		if err := runDemo(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "demo failed: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
