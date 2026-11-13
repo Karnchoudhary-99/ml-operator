@@ -62,6 +62,28 @@ func ApplyDefaults(d *ModelDeployment) {
 		if spec.Canary.IntervalSeconds == 0 {
 			spec.Canary.IntervalSeconds = DefaultCanaryInterval
 		}
+		// Gate thresholds: a missing gate gets the full default
+		// set; a partial gate keeps the user's values and fills
+		// only the zero fields, so a rollout that sets just an
+		// error budget still gets the default latency cap and
+		// ready ratio instead of silently disabling those checks.
+		if spec.Canary.Gate == nil {
+			spec.Canary.Gate = &GateSpec{
+				MaxErrorRate:    DefaultGateMaxErrorRate,
+				MaxP95LatencyMs: DefaultGateMaxP95LatencyMs,
+				MinReadyRatio:   DefaultGateMinReadyRatio,
+			}
+		} else {
+			if spec.Canary.Gate.MaxErrorRate == 0 {
+				spec.Canary.Gate.MaxErrorRate = DefaultGateMaxErrorRate
+			}
+			if spec.Canary.Gate.MaxP95LatencyMs == 0 {
+				spec.Canary.Gate.MaxP95LatencyMs = DefaultGateMaxP95LatencyMs
+			}
+			if spec.Canary.Gate.MinReadyRatio == 0 {
+				spec.Canary.Gate.MinReadyRatio = DefaultGateMinReadyRatio
+			}
+		}
 	}
 	if spec.Autoscaling != nil && spec.Autoscaling.MinReplicas == 0 {
 		spec.Autoscaling.MinReplicas = DefaultAutoscalingMin
