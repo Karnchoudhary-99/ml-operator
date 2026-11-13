@@ -24,7 +24,7 @@ func cmdApply(opts *options, args []string) int {
 	}
 	file := fs.String("f", "", "manifest file (YAML or JSON)")
 	dryRun := fs.Bool("dry-run", false, "validate only, do not change state")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
 	if *file == "" {

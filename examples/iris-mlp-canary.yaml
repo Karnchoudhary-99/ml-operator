@@ -1,0 +1,16 @@
+# Canary rollout manifest for the mlop tour: v2 of iris-mlp ships
+# behind a 10% canary with a single step to 100% (steps: 0) and a
+# 1-second step interval, so the tour runs in seconds.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v2
+    framework: onnx
+    version: v2
+  replicas: 2
+  strategy: Canary
+  canary:
+    weight: 10
+    steps: 0
+    intervalSeconds: 1
