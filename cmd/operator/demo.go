@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
@@ -11,9 +12,10 @@ import (
 
 // runDemo exercises the reconciler end to end against the in-memory
 // fake cluster: register -> reconcile (create) -> pods ready ->
-// reconcile (available) -> new image -> reconcile (rolling update).
-// It prints every action and phase, so the reconcile loop is visible
-// without a real cluster.
+// reconcile (available) -> new image -> reconcile (rolling update)
+// -> canary rollout to a third version (weight steps, health gate,
+// promotion). It prints every action and phase, so the reconcile
+// loop is visible without a real cluster.
 func runDemo(w io.Writer) error {
 	reg := registry.New()
 	cluster := controller.NewFakeCluster()
@@ -68,6 +70,55 @@ func runDemo(w io.Writer) error {
 		return err
 	}
 	printResult(w, "reconcile 4 (v2 ready)", res)
+
+	// Canary rollout to v3: the stable Deployment keeps serving v2
+	// while the canary steps 10% -> 55% -> 100% behind the health
+	// gate, then promotes and the canary is deleted. The demo drives
+	// the reconciler's clock 31s per step so each step waits out
+	// the 30s canary interval.
+	now := time.Now()
+	rec.Now = func() time.Time { return now }
+	d.Generation = 3
+	d.Spec.Model.Image = "registry.example.com/iris-mlp:v3"
+	d.Spec.Model.Version = "v3"
+	d.Spec.Strategy = api.StrategyCanary
+	d.Spec.Canary = &api.CanarySpec{Weight: 10, Steps: 2, IntervalSeconds: 30}
+	reg.Register(d)
+	fmt.Fprintln(w, "registered iris-mlp v3 (canary 10%, 2 steps)")
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 5 (canary v3 created)", res)
+
+	cluster.SetReady("default/iris-mlp-canary", 1)
+	now = now.Add(31 * time.Second)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 6 (canary 55%)", res)
+
+	now = now.Add(31 * time.Second)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 7 (canary 100%)", res)
+
+	cluster.SetReady("default/iris-mlp-canary", 2)
+	now = now.Add(31 * time.Second)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 8 (canary promoted)", res)
+
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 9 (in sync)", res)
 	return nil
 }
 
