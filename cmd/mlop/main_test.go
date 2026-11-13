@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runCLI runs the CLI in-process with buffered output and a temp
@@ -149,6 +150,133 @@ func TestStatusErrors(t *testing.T) {
 	code, _, _ = runCLI(t, "status", "a", "b")
 	if code == 0 {
 		t.Fatalf("status with two names should fail")
+	}
+}
+
+const irisCanary = `
+name: iris-mlp
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v2
+    framework: onnx
+    version: v2
+  replicas: 2
+  strategy: Canary
+  canary:
+    weight: 10
+    steps: 0
+    intervalSeconds: 1
+`
+
+func TestReadyDrivesAvailable(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	manifest := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply failed")
+	}
+	// Flags after the name must work (reorderFlags).
+	code, out, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2")
+	if code != 0 || !strings.Contains(out, "phase=Available") {
+		t.Fatalf("ready exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "phase:      Available") {
+		t.Fatalf("status after ready exit %d, out %q", code, out)
+	}
+}
+
+func TestReadyErrors(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	code, _, errOut := runCLIState(t, state, "ready", "nope", "--replicas", "1")
+	if code == 0 || !strings.Contains(errOut, "no deployment") {
+		t.Fatalf("ready unknown exit %d, err %q", code, errOut)
+	}
+	manifest := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply failed")
+	}
+	// No canary Deployment exists for a RollingUpdate deployment.
+	code, _, errOut = runCLIState(t, state, "ready", "iris-mlp", "--replicas", "1", "--canary")
+	if code == 0 || !strings.Contains(errOut, "no Deployment") {
+		t.Fatalf("ready --canary exit %d, err %q", code, errOut)
+	}
+	code, _, _ = runCLIState(t, state, "ready", "iris-mlp")
+	if code == 0 {
+		t.Fatalf("ready without --replicas should fail")
+	}
+}
+
+func TestRolloutStatusNoCanary(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	manifest := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply failed")
+	}
+	code, out, _ := runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "no canary rollout in flight") {
+		t.Fatalf("rollout status exit %d, out %q", code, out)
+	}
+	code, _, _ = runCLIState(t, state, "rollout")
+	if code == 0 {
+		t.Fatalf("rollout without a subcommand should fail")
+	}
+	code, _, _ = runCLIState(t, state, "rollout", "status", "nope")
+	if code == 0 {
+		t.Fatalf("rollout status for an unknown deployment should fail")
+	}
+}
+
+func TestCanaryFlowThroughCLI(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	v1 := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", v1); code != 0 {
+		t.Fatalf("apply v1 failed")
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready v1 failed")
+	}
+	// A plain apply records no events: only notable transitions do.
+	code, out, _ := runCLIState(t, state, "logs", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "no events") {
+		t.Fatalf("logs after plain apply exit %d, out %q", code, out)
+	}
+
+	canary := writeManifest(t, irisCanary)
+	code, out, _ = runCLIState(t, state, "apply", "-f", canary)
+	if code != 0 || !strings.Contains(out, "(generation 2)") {
+		t.Fatalf("canary apply exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "step:       1/2 (weight 10%)") {
+		t.Fatalf("rollout status exit %d, out %q", code, out)
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2", "--canary"); code != 0 {
+		t.Fatalf("ready canary failed")
+	}
+	// The step interval is 1s: wait it out, then the rollout advances.
+	time.Sleep(2 * time.Second)
+	code, out, _ = runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "weight 100%") {
+		t.Fatalf("rollout advance exit %d, out %q", code, out)
+	}
+	time.Sleep(2 * time.Second)
+	code, out, _ = runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "state:      promoted") {
+		t.Fatalf("rollout promote exit %d, out %q", code, out)
+	}
+	// The promotion is in the event log, and v2 is live.
+	code, out, _ = runCLIState(t, state, "logs", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "CanaryPromoted") {
+		t.Fatalf("logs after promote exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "registry.example.com/iris-mlp:v2") {
+		t.Fatalf("status after promote exit %d, out %q", code, out)
+	}
+	// --tail limits the log.
+	code, out, _ = runCLIState(t, state, "logs", "iris-mlp", "--tail", "1")
+	if code != 0 || strings.Count(out, "\n") != 1 {
+		t.Fatalf("logs --tail 1 exit %d, out %q", code, out)
 	}
 }
 
