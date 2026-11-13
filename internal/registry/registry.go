@@ -1,0 +1,223 @@
+package registry
+
+import (
+	"sort"
+	"sync"
+
+	"github.com/Karnchoudhary-99/ml-operator/internal/api"
+)
+
+// EventType classifies a registry change notification.
+type EventType string
+
+const (
+	// EventAdded fires when a deployment is first registered.
+	EventAdded EventType = "Added"
+	// EventModified fires when an existing deployment is re-registered
+	// with a new generation (or any changed spec).
+	EventModified EventType = "Modified"
+	// EventDeleted fires when a deployment is removed.
+	EventDeleted EventType = "Deleted"
+)
+
+// Event is a single registry change notification.
+type Event struct {
+	Type       EventType
+	Deployment api.ModelDeployment
+	// Revision is the registry revision after this event.
+	Revision int64
+}
+
+// Entry is one registered deployment plus its registry metadata.
+type Entry struct {
+	Deployment api.ModelDeployment
+	// Revision counts registrations of this key (starts at 1).
+	Revision int64
+}
+
+// Registry is a thread-safe in-memory store of ModelDeployments. The
+// operator's reconciler reads from it; the API server (and the CLI in
+// demo mode) writes to it. It is the source of truth until the
+// Kubernetes-backed store lands.
+type Registry struct {
+	mu       sync.RWMutex
+	entries  map[string]*Entry
+	revision int64 // global revision, bumped on every mutation
+	watchers map[int]chan Event
+	nextID   int
+}
+
+// New returns an empty registry.
+func New() *Registry {
+	return &Registry{
+		entries:  make(map[string]*Entry),
+		watchers: make(map[int]chan Event),
+	}
+}
+
+// Register inserts a new deployment or updates an existing one. It
+// returns the entry and whether the key already existed. A
+// re-registration with an unchanged generation is a no-op for the
+// entry but still bumps the global revision and notifies watchers
+// only when the spec actually changed.
+func (r *Registry) Register(d api.ModelDeployment) (*Entry, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := d.Key()
+	existing, ok := r.entries[key]
+	changed := true
+	if ok {
+		changed = !specsEqual(existing.Deployment.Spec, d.Spec) ||
+			existing.Deployment.Generation != d.Generation
+		existing.Deployment = d
+		existing.Revision++
+	} else {
+		existing = &Entry{Deployment: d, Revision: 1}
+		r.entries[key] = existing
+	}
+	r.revision++
+	snapshot := *existing
+	typ := EventAdded
+	if ok {
+		typ = EventModified
+	}
+	rev := r.revision
+	r.notifyLocked(Event{Type: typ, Deployment: snapshot.Deployment, Revision: rev}, changed)
+	return &snapshot, ok
+}
+
+// Get returns the entry for key ("namespace/name"), or nil.
+func (r *Registry) Get(key string) *Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.entries[key]; ok {
+		snapshot := *e
+		return &snapshot
+	}
+	return nil
+}
+
+// List returns all entries sorted by key.
+func (r *Registry) List() []*Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	keys := make([]string, 0, len(r.entries))
+	for k := range r.entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]*Entry, 0, len(keys))
+	for _, k := range keys {
+		snapshot := *r.entries[k]
+		out = append(out, &snapshot)
+	}
+	return out
+}
+
+// Delete removes the entry for key. It returns the removed entry, or
+// nil when the key was not present.
+func (r *Registry) Delete(key string) *Entry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[key]
+	if !ok {
+		return nil
+	}
+	delete(r.entries, key)
+	r.revision++
+	snapshot := *e
+	r.notifyLocked(Event{Type: EventDeleted, Deployment: snapshot.Deployment, Revision: r.revision}, true)
+	return &snapshot
+}
+
+// Len returns the number of registered deployments.
+func (r *Registry) Len() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.entries)
+}
+
+// Revision returns the global revision (number of mutations so far).
+func (r *Registry) Revision() int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.revision
+}
+
+// Watch returns a channel receiving every registry event from now on,
+// plus an unsubscribe function. The channel is buffered (16 events);
+// a slow watcher drops the oldest event rather than blocking the
+// registry — watchers must re-list after a gap.
+func (r *Registry) Watch() (<-chan Event, func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ch := make(chan Event, 16)
+	id := r.nextID
+	r.nextID++
+	r.watchers[id] = ch
+	return ch, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.watchers, id)
+	}
+}
+
+// notifyLocked broadcasts an event. Callers must hold r.mu. When
+// changed is false the event is skipped entirely (no-op
+// re-registration).
+func (r *Registry) notifyLocked(ev Event, changed bool) {
+	if !changed {
+		return
+	}
+	for _, ch := range r.watchers {
+		select {
+		case ch <- ev:
+		default:
+			// Slow watcher: drop the oldest event to make room.
+			select {
+			case <-ch:
+			default:
+			}
+			ch <- ev
+		}
+	}
+}
+
+// specsEqual reports whether two specs are identical. It compares the
+// fields the reconciler cares about; Env maps are compared by content.
+func specsEqual(a, b api.ModelDeploymentSpec) bool {
+	if a.Model != b.Model || a.Resources != b.Resources || a.Health != b.Health {
+		return false
+	}
+	if (a.Replicas == nil) != (b.Replicas == nil) {
+		return false
+	}
+	if a.Replicas != nil && *a.Replicas != *b.Replicas {
+		return false
+	}
+	if a.Port != b.Port || a.Strategy != b.Strategy {
+		return false
+	}
+	if (a.Canary == nil) != (b.Canary == nil) {
+		return false
+	}
+	if a.Canary != nil && *a.Canary != *b.Canary {
+		return false
+	}
+	if (a.Autoscaling == nil) != (b.Autoscaling == nil) {
+		return false
+	}
+	if a.Autoscaling != nil && *a.Autoscaling != *b.Autoscaling {
+		return false
+	}
+	if len(a.Env) != len(b.Env) {
+		return false
+	}
+	for k, v := range a.Env {
+		if bv, ok := b.Env[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
