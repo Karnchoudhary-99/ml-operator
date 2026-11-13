@@ -59,6 +59,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdLogs(opts, rest[1:])
 	case "rollout":
 		return cmdRollout(opts, rest[1:])
+	case "ready":
+		return cmdReady(opts, rest[1:])
 	case "version":
 		fmt.Fprintf(stdout, "mlop %s\n", version)
 		return 0
@@ -81,6 +83,7 @@ Commands:
   status [name]                        show deployments and their phases
   logs <name> [--tail N]               show recorded events for a deployment
   rollout status <name>                show canary rollout progress
+  ready <name> --replicas N [--canary] simulate pods passing the readiness gate
   version                              print mlop version
 
 State:
