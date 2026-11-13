@@ -133,6 +133,10 @@ func CanaryDeploymentFor(d api.ModelDeployment) Deployment {
 	dep.Replicas = replicas
 	dep.Canary = true
 	dep.Labels["ml-operator/canary"] = "true"
+	// The canary Deployment selects canary pods only; the stable
+	// Deployment's selector excludes the label, so neither adopts
+	// the other's pods.
+	dep.Selector["ml-operator/canary"] = "true"
 	return dep
 }
 
