@@ -102,6 +102,17 @@ func validateStrategy(spec ModelDeploymentSpec) []error {
 		if spec.Canary.IntervalSeconds < 0 {
 			errs = append(errs, fmt.Errorf("spec.canary.intervalSeconds must be >= 0, got %d", spec.Canary.IntervalSeconds))
 		}
+		if g := spec.Canary.Gate; g != nil {
+			if g.MaxErrorRate < 0 || g.MaxErrorRate > 1 {
+				errs = append(errs, fmt.Errorf("spec.canary.gate.maxErrorRate must be between 0 and 1, got %g", g.MaxErrorRate))
+			}
+			if g.MaxP95LatencyMs < 0 {
+				errs = append(errs, fmt.Errorf("spec.canary.gate.maxP95LatencyMs must be >= 0, got %g", g.MaxP95LatencyMs))
+			}
+			if g.MinReadyRatio < 0 || g.MinReadyRatio > 1 {
+				errs = append(errs, fmt.Errorf("spec.canary.gate.minReadyRatio must be between 0 and 1, got %g", g.MinReadyRatio))
+			}
+		}
 	}
 	return errs
 }
