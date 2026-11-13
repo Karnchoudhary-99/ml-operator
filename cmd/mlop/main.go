@@ -53,6 +53,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch rest[0] {
 	case "apply":
 		return cmdApply(opts, rest[1:])
+	case "status":
+		return cmdStatus(opts, rest[1:])
 	case "version":
 		fmt.Fprintf(stdout, "mlop %s\n", version)
 		return 0
@@ -72,6 +74,7 @@ Usage:
 
 Commands:
   apply -f manifest.yaml [--dry-run]   validate + register + reconcile a deployment
+  status [name]                        show deployments and their phases
   version                              print mlop version
 
 State:
