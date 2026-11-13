@@ -32,6 +32,47 @@ go run ./cmd/operator --help
 go run ./cmd/operator --demo
 ```
 
+## The mlop CLI
+
+`mlop` is the operator's command-line client. There is no real
+cluster yet, so it works over the same in-memory world the demo
+uses — registry, reconciler, fake cluster — persisted to a JSON
+state file between invocations (default `~/.mlop/state.json`, or
+`--state` / `$MLOP_STATE`). Separate invocations share one world:
+apply in one process, status in the next.
+
+```bash
+go build -o mlop ./cmd/mlop
+
+# Validate a manifest without changing anything:
+mlop apply -f examples/iris-mlp.yaml --dry-run
+
+# Apply it: registers the deployment (generation 1) and reconciles once.
+mlop apply -f examples/iris-mlp.yaml
+# applied default/iris-mlp (generation 1): phase=Progressing
+#   - CreateDeployment default/iris-mlp (deployment does not exist)
+#   - CreateService default/iris-mlp (service does not exist)
+
+# Re-applying the same manifest is a no-op; a changed spec bumps
+# the generation and rolls the model out.
+mlop apply -f examples/iris-mlp.yaml
+# unchanged default/iris-mlp (generation 1): phase=Progressing
+
+# Status: a table for all deployments, or a detail view for one.
+mlop status
+mlop status iris-mlp
+```
+
+Manifests are YAML (the shape in `examples/iris-mlp.yaml`) or JSON
+with the same keys. The parser is a small subset — nested maps,
+string/int/bool scalars, `#` comments — with no external
+dependency; unknown keys, lists, tabs and flow collections are
+rejected with a line number. `mlop` assigns generations itself:
+a new key starts at 1, a changed spec bumps it, an identical
+re-apply keeps it. The autoscaler's scale-down stabilization
+window is in-memory only, so it restarts on every invocation —
+documented in `internal/store`.
+
 ## How it works
 
 1. You write a `ModelDeployment` manifest: model image, replicas,
@@ -46,7 +87,10 @@ go run ./cmd/operator --demo
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
+- `cmd/mlop` — CLI client (`apply`, `status`; `logs`, `rollout`, `ready` follow)
 - `internal/api` — `ModelDeployment` types, validation, defaults
+- `internal/manifest` — YAML/JSON manifest parsing (no external deps)
+- `internal/store` — JSON state file shared between mlop invocations
 - `internal/registry` — in-memory model registry + watch
 - `internal/controller` — reconciler (diff, apply plan, rollout)
 - `internal/render` — Deployment / Service / HPA rendering
