@@ -3,10 +3,12 @@ package controller
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/registry"
 	"github.com/Karnchoudhary-99/ml-operator/internal/render"
+	"github.com/Karnchoudhary-99/ml-operator/internal/rollout"
 )
 
 // ActionKind classifies one step of an apply plan.
@@ -59,14 +61,37 @@ type Result struct {
 // then record the phase in the registry status. It is
 // level-triggered and idempotent — reconciling an in-sync deployment
 // applies nothing.
+//
+// For Canary rollouts the reconciler also drives the rollout state
+// machine (internal/rollout): the stable Deployment keeps serving
+// the previous version while the canary Deployment steps up its
+// traffic weight behind the health gate, and promotion folds the new
+// image into the stable Deployment and deletes the canary.
 type Reconciler struct {
 	Registry *registry.Registry
 	Cluster  Cluster
+	// Now is the clock the rollout state machine reads. Tests set it
+	// to a controllable clock; nil means time.Now.
+	Now func() time.Time
+
+	// rollouts is the per-deployment canary rollout state, keyed by
+	// "namespace/name". A done state (promoted or aborted) stays in
+	// the map so a later reconcile of the same generation does not
+	// restart the rollout; a new generation resets it.
+	rollouts map[string]rollout.State
 }
 
 // New returns a Reconciler over reg and cluster.
 func New(reg *registry.Registry, cluster Cluster) *Reconciler {
-	return &Reconciler{Registry: reg, Cluster: cluster}
+	return &Reconciler{Registry: reg, Cluster: cluster, rollouts: make(map[string]rollout.State)}
+}
+
+// now returns the reconciler's clock.
+func (r *Reconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 // Reconcile converges the deployment at key ("namespace/name").
@@ -89,18 +114,53 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		return Result{Phase: api.PhaseFailed, Message: msg}, nil
 	}
 
+	// Canary rollouts keep their state across reconciles; any other
+	// strategy drops it, so returning to Canary later starts fresh.
+	liveStable, liveOK := r.Cluster.GetDeployment(key)
+	var rs rollout.State
+	var hasRollout bool
+	if d.Spec.Strategy == api.StrategyCanary && d.Spec.Canary != nil {
+		rs, hasRollout = r.rolloutState(key, d), true
+	} else {
+		delete(r.rollouts, key)
+	}
+
 	desired := render.DeploymentFor(d)
+	var canary *render.Deployment
+	if hasRollout {
+		if liveOK && !rs.Done {
+			// The rollout is in flight: the stable Deployment
+			// keeps serving the previous version until promotion.
+			// Only the image and version label are pinned — other
+			// spec changes (port, resources, env) still apply.
+			desired.Container.Image = liveStable.Container.Image
+			desired.Labels["ml-operator/version"] = liveStable.Labels["ml-operator/version"]
+		}
+		if !rs.Done {
+			c := render.CanaryDeploymentForWeight(d, rs.CurrentWeight())
+			canary = &c
+		}
+	}
 	desiredSvc := render.ServiceFor(d)
-	plan := r.plan(key, d, desired, desiredSvc)
+
+	plan := r.plan(key, d, desired, desiredSvc, canary)
+	actions := plan
 	for _, a := range plan {
-		if err := r.apply(a, d); err != nil {
+		if err := r.apply(a, desired, canary, desiredSvc); err != nil {
 			// A failed apply is Degraded, not Failed: the spec is
 			// fine, the cluster operation is what broke, and the
 			// caller should retry.
 			msg := fmt.Sprintf("apply %s %s failed: %v", a.Kind, a.Key, err)
 			r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
-			return Result{Actions: plan, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
+			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 		}
+	}
+
+	// A canary rollout in flight is judged after the apply: the gate
+	// reads the live canary's readiness, and the state machine
+	// decides hold / advance / promote / abort.
+	if hasRollout && !rs.Done {
+		return r.reconcileCanary(key, d, rs, actions)
 	}
 
 	ready := r.Cluster.ReadyReplicas(key)
@@ -114,13 +174,134 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		phase = api.PhaseDegraded
 	}
 	r.updateStatus(key, d, phase, ready, msg)
-	return Result{Actions: plan, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
+	return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
+}
+
+// rolloutState returns the rollout state for key, starting a fresh
+// one when there is none, the generation changed, or the canary spec
+// (and therefore the weight ladder) changed. A done state is kept:
+// it records that this generation already promoted or aborted, so
+// reconciling the same generation again never restarts the rollout.
+func (r *Reconciler) rolloutState(key string, d api.ModelDeployment) rollout.State {
+	ladder := rollout.StepWeights(*d.Spec.Canary)
+	if s, ok := r.rollouts[key]; ok && s.Generation == d.Generation && equalWeights(s.Weights, ladder) {
+		return s
+	}
+	s := rollout.New(d.Generation, *d.Spec.Canary, r.now())
+	r.rollouts[key] = s
+	return s
+}
+
+// reconcileCanary evaluates the health gate for an in-flight canary
+// rollout and acts on the state machine's decision. It returns the
+// reconcile result; the caller has already applied the plan.
+func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollout.State, actions []Action) (Result, error) {
+	ns, name, _ := strings.Cut(key, "/")
+	canaryKey := ns + "/" + name + "-canary"
+	interval := time.Duration(d.Spec.Canary.IntervalSeconds) * time.Second
+
+	// The gate is readiness-only for now: the cluster reports ready
+	// replicas, and there is no metrics source yet for error rate or
+	// latency. The metrics phase fills those in.
+	var ev rollout.Evaluation
+	if liveCanary, ok := r.Cluster.GetDeployment(canaryKey); ok {
+		ev = rollout.Evaluate(rollout.Gate{}, rollout.Sample{
+			ReadyReplicas:   r.Cluster.ReadyReplicas(canaryKey),
+			DesiredReplicas: liveCanary.Replicas,
+		})
+	} else {
+		ev = rollout.Evaluation{Pending: true, Reasons: []string{"canary Deployment not created yet"}}
+	}
+
+	oldWeight := rs.CurrentWeight()
+	next, decision := rollout.Next(rs, ev, r.now(), interval, 0)
+	r.rollouts[key] = next
+
+	stableReady := r.Cluster.ReadyReplicas(key)
+	desiredReplicas := int32(1)
+	if d.Spec.Replicas != nil {
+		desiredReplicas = *d.Spec.Replicas
+	}
+
+	switch decision {
+	case rollout.DecisionAbort:
+		// The canary failed the gate too many times: remove it and
+		// report Degraded. The stable Deployment keeps serving the
+		// previous version. Terminal for this generation.
+		if err := r.Cluster.DeleteDeployment(canaryKey); err != nil {
+			return Result{Actions: actions}, err
+		}
+		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey,
+			Reason: fmt.Sprintf("canary aborted after %d failed health gates", next.Failures)})
+		msg := fmt.Sprintf("canary aborted after %d failed health gates: %s", next.Failures, strings.Join(ev.Reasons, "; "))
+		r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
+
+	case rollout.DecisionPromote:
+		// The gate passed at the final weight: the stable
+		// Deployment takes the new image and the canary goes away.
+		promoted := render.DeploymentFor(d)
+		if err := r.Cluster.ApplyDeployment(promoted); err != nil {
+			msg := fmt.Sprintf("promote: apply stable Deployment failed: %v", err)
+			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
+		}
+		actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: key,
+			Reason: fmt.Sprintf("canary promoted: stable now serves %q", d.Spec.Model.Image)})
+		if err := r.Cluster.DeleteDeployment(canaryKey); err != nil {
+			return Result{Actions: actions}, err
+		}
+		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey, Reason: "canary promoted"})
+		phase := api.PhaseProgressing
+		msg := fmt.Sprintf("canary promoted at 100%% — stable now serves %s (%d/%d replicas ready)",
+			d.Spec.Model.Version, stableReady, desiredReplicas)
+		if stableReady >= desiredReplicas {
+			phase = api.PhaseAvailable
+		} else if stableReady > 0 {
+			phase = api.PhaseDegraded
+		}
+		r.updateStatus(key, d, phase, stableReady, msg)
+		return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
+
+	case rollout.DecisionAdvance:
+		// Step the canary to the next weight now, so the new size
+		// is live for the next reconcile's gate evaluation.
+		c := render.CanaryDeploymentForWeight(d, next.CurrentWeight())
+		if err := r.Cluster.ApplyDeployment(c); err != nil {
+			msg := fmt.Sprintf("canary weight step failed: %v", err)
+			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
+		}
+		actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: canaryKey,
+			Reason: fmt.Sprintf("canary weight %d%% -> %d%%", oldWeight, next.CurrentWeight())})
+	}
+
+	// Hold or advance: the rollout is still in flight. The phase is
+	// Progressing while the stable Deployment serves, Degraded only
+	// when it is below its replica count. Either way the caller must
+	// reconcile again — the rollout only finishes on promote/abort.
+	phase := api.PhaseProgressing
+	if stableReady < desiredReplicas && stableReady > 0 {
+		phase = api.PhaseDegraded
+	}
+	gateSummary := "gate passed"
+	if !ev.Pass {
+		gateSummary = "gate: " + strings.Join(ev.Reasons, "; ")
+	}
+	msg := fmt.Sprintf("canary %d%% (step %d/%d) — %s", next.CurrentWeight(), next.Step+1, len(next.Weights), gateSummary)
+	if decision == rollout.DecisionAdvance {
+		msg = fmt.Sprintf("canary advanced to %d%% (step %d/%d)", next.CurrentWeight(), next.Step+1, len(next.Weights))
+	}
+	r.updateStatus(key, d, phase, stableReady, msg)
+	return Result{Actions: actions, Phase: phase, Requeue: true, Message: msg}, nil
 }
 
 // plan diffs the desired state against the live cluster and returns
 // the minimal ordered apply plan: Deployment first, then canary (if
-// any), then Service. It never mutates the cluster.
-func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service) []Action {
+// any), then Service. It never mutates the cluster. canary is nil
+// when no canary Deployment is desired for this reconcile — either
+// the strategy is not Canary, or the rollout already finished.
+func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service, canary *render.Deployment) []Action {
 	var actions []Action
 
 	live, ok := r.Cluster.GetDeployment(key)
@@ -140,19 +321,20 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 		}
 	}
 
-	canary := render.CanaryDeploymentFor(d)
-	canaryKey := canary.Namespace + "/" + canary.Name
-	if d.Spec.Strategy == api.StrategyCanary {
+	ns, name, _ := strings.Cut(key, "/")
+	canaryKey := ns + "/" + name + "-canary"
+	if canary != nil {
 		liveCanary, ok := r.Cluster.GetDeployment(canaryKey)
 		if !ok {
 			actions = append(actions, Action{Kind: ActionCreateDeployment, Key: canaryKey, Reason: "canary deployment does not exist"})
-		} else if reasons := render.DeploymentDiffReasons(canary, liveCanary); len(reasons) > 0 {
+		} else if reasons := render.DeploymentDiffReasons(*canary, liveCanary); len(reasons) > 0 {
 			actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: canaryKey, Reason: strings.Join(reasons, ", ")})
 		}
 	} else if _, ok := r.Cluster.GetDeployment(canaryKey); ok {
-		// The strategy moved away from Canary: remove the leftover
-		// canary Deployment so it stops serving.
-		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey, Reason: "strategy is no longer Canary"})
+		// No canary is desired: the strategy moved away from Canary,
+		// or the rollout finished. Remove the leftover canary
+		// Deployment so it stops serving.
+		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey, Reason: "no canary deployment desired"})
 	}
 
 	liveSvc, ok := r.Cluster.GetService(key)
@@ -168,15 +350,26 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 	return actions
 }
 
-// apply executes one plan action against the cluster.
-func (r *Reconciler) apply(a Action, d api.ModelDeployment) error {
+// apply executes one plan action against the cluster, resolving the
+// object from the desired state the plan was built from.
+func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.Deployment, svc render.Service) error {
 	switch a.Kind {
 	case ActionCreateDeployment, ActionUpdateDeployment:
-		return r.Cluster.ApplyDeployment(desiredDeploymentFor(d, a.Key))
+		stableKey := desired.Namespace + "/" + desired.Name
+		if a.Key == stableKey {
+			return r.Cluster.ApplyDeployment(desired)
+		}
+		if canary != nil {
+			canaryKey := canary.Namespace + "/" + canary.Name
+			if a.Key == canaryKey {
+				return r.Cluster.ApplyDeployment(*canary)
+			}
+		}
+		return fmt.Errorf("no desired deployment for key %q", a.Key)
 	case ActionDeleteDeployment:
 		return r.Cluster.DeleteDeployment(a.Key)
 	case ActionCreateService, ActionUpdateService:
-		return r.Cluster.ApplyService(render.ServiceFor(d))
+		return r.Cluster.ApplyService(svc)
 	case ActionDeleteService:
 		return r.Cluster.DeleteService(a.Key)
 	case ActionNoOp:
@@ -189,6 +382,7 @@ func (r *Reconciler) apply(a Action, d api.ModelDeployment) error {
 // that left the registry: stable Deployment, canary Deployment (if
 // any), and Service. Deleting something already gone is a no-op.
 func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
+	delete(r.rollouts, key)
 	var actions []Action
 	ns, name, _ := strings.Cut(key, "/")
 	canaryKey := ns + "/" + name + "-canary"
@@ -244,14 +438,16 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 	r.Registry.UpdateStatus(key, status)
 }
 
-// desiredDeploymentFor resolves which rendered Deployment an action
-// key refers to: the stable one, or the canary one.
-func desiredDeploymentFor(d api.ModelDeployment, key string) render.Deployment {
-	stable := render.DeploymentFor(d)
-	if stable.Namespace+"/"+stable.Name == key {
-		return stable
+func equalWeights(a, b []int32) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	return render.CanaryDeploymentFor(d)
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func boolStatus(v bool) string {
