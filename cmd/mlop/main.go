@@ -57,6 +57,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdStatus(opts, rest[1:])
 	case "logs":
 		return cmdLogs(opts, rest[1:])
+	case "rollout":
+		return cmdRollout(opts, rest[1:])
 	case "version":
 		fmt.Fprintf(stdout, "mlop %s\n", version)
 		return 0
@@ -78,6 +80,7 @@ Commands:
   apply -f manifest.yaml [--dry-run]   validate + register + reconcile a deployment
   status [name]                        show deployments and their phases
   logs <name> [--tail N]               show recorded events for a deployment
+  rollout status <name>                show canary rollout progress
   version                              print mlop version
 
 State:
