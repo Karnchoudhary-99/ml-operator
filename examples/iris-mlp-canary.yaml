@@ -1,6 +1,8 @@
 # Canary rollout manifest for the mlop tour: v2 of iris-mlp ships
 # behind a 10% canary with a single step to 100% (steps: 0) and a
-# 1-second step interval, so the tour runs in seconds.
+# 1-second step interval, so the tour runs in seconds. The gate is
+# tighter than the operator defaults (2% errors instead of 5%),
+# because iris-mlp is latency-sensitive in this example.
 name: iris-mlp
 namespace: default
 spec:
@@ -14,3 +16,7 @@ spec:
     weight: 10
     steps: 0
     intervalSeconds: 1
+    gate:
+      maxErrorRate: 0.02
+      maxP95LatencyMs: 250
+      minReadyRatio: 1.0

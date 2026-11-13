@@ -19,6 +19,7 @@ with the desired state.
 - [x] Rollout strategies (recreate, rolling update, canary)
 - [x] Autoscaling (HPA from CPU / request-rate / GPU signals)
 - [x] Health + readiness gates (model-load probe, traffic shift)
+- [x] Per-rollout health-gate thresholds (`canary.gate`)
 - [x] Metrics + events (Prometheus, Kubernetes events)
 - [x] CLI (`mlop`: apply, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
@@ -206,15 +207,21 @@ adopts the other's pods.
   even increments, last step always exactly 100% (e.g. weight 10,
   3 steps → `[10 40 70 100]`; 0 steps means one jump to 100%).
 - `Evaluate` checks the health gate: minimum ready ratio (default
-  all canary pods ready), max error rate (5%), max p95 latency
-  (500ms) — the reconciler's conservative defaults; a 0 threshold
-  disables that check. The error-rate and latency samples come from
-  the cluster metrics source when it reports them, and are skipped
-  otherwise. Zero ready replicas is *pending*, not a failure — a
-  fresh canary must not burn its failure budget while its pods come
-  up. The model-load probe is pending the same way: when the
-  cluster reports the model has not finished loading yet, the gate
-  holds until it has, whatever pod readiness says.
+  all canary pods ready), max error rate, max p95 latency — a 0
+  threshold disables that check at this layer. In practice the
+  reconciler never passes a 0: each rollout carries its own
+  thresholds from a `canary.gate` block in the manifest
+  (`maxErrorRate`, `maxP95LatencyMs`, `minReadyRatio`), and
+  `ApplyDefaults` fills any zero or missing field with the
+  operator defaults (5% errors, 500ms p95, all pods ready), so a
+  threshold tunes the gate but never disables its check. The
+  error-rate and latency samples come from the cluster metrics
+  source when it reports them, and are skipped otherwise. Zero
+  ready replicas is *pending*, not a failure — a fresh canary must
+  not burn its failure budget while its pods come up. The
+  model-load probe is pending the same way: when the cluster
+  reports the model has not finished loading yet, the gate holds
+  until it has, whatever pod readiness says.
 - The state machine holds, advances (once the step interval has
   elapsed), promotes at the final weight, or aborts after 3
   consecutive gate failures (configurable). A pass clears the
