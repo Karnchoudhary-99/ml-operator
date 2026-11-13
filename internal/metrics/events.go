@@ -117,6 +117,19 @@ func (r *Recorder) EventsFor(deployment string) []Event {
 	return out
 }
 
+// Restore replaces the recorded events with previously saved ones
+// (loaded from the state file), keeping at most max. It is how the
+// mlop CLI carries the event history across invocations; the events
+// arrive already deduplicated, so no aggregation is needed here.
+func (r *Recorder) Restore(events []Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append([]Event(nil), events...)
+	if len(r.events) > r.max {
+		r.events = r.events[len(r.events)-r.max:]
+	}
+}
+
 // Len returns how many events are currently recorded.
 func (r *Recorder) Len() int {
 	r.mu.Lock()

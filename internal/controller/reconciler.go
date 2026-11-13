@@ -110,6 +110,44 @@ func New(reg *registry.Registry, cluster Cluster) *Reconciler {
 	}
 }
 
+// RolloutState returns the rollout state the reconciler tracks for
+// key, or false when no canary rollout is (or was) in flight for it.
+// The mlop CLI reads it to report rollout progress and to persist
+// it, so a canary survives across CLI invocations.
+func (r *Reconciler) RolloutState(key string) (rollout.State, bool) {
+	s, ok := r.rollouts[key]
+	return s, ok
+}
+
+// RolloutStates returns a copy of every rollout state the
+// reconciler tracks, keyed by "namespace/name".
+func (r *Reconciler) RolloutStates() map[string]rollout.State {
+	out := make(map[string]rollout.State, len(r.rollouts))
+	for k, v := range r.rollouts {
+		out[k] = v
+	}
+	return out
+}
+
+// RestoreRolloutState installs a rollout state loaded from the state
+// file. A restored state is only trusted when it belongs to the same
+// generation and weight ladder the deployment still has; a stale one
+// is dropped and the next reconcile starts a fresh rollout.
+func (r *Reconciler) RestoreRolloutState(key string, s rollout.State) {
+	entry := r.Registry.Get(key)
+	if entry == nil {
+		return
+	}
+	d := entry.Deployment
+	if d.Spec.Canary == nil || d.Generation != s.Generation {
+		return
+	}
+	if !equalWeights(s.Weights, rollout.StepWeights(*d.Spec.Canary)) {
+		return
+	}
+	r.rollouts[key] = s
+}
+
 // now returns the reconciler's clock.
 func (r *Reconciler) now() time.Time {
 	if r.Now != nil {
