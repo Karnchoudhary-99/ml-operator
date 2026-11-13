@@ -205,10 +205,11 @@ func TestReconcileCanary(t *testing.T) {
 	if !canary.Canary || canary.Replicas != 1 { // 25% of 2 rounds to 1
 		t.Fatalf("canary wrong: %+v", canary)
 	}
-	// The Service still selects stable pods only.
+	// The Service selector carries no canary label, so it matches
+	// both stable and canary pods and traffic splits by pod count.
 	svc, _ := cluster.GetService("default/iris-mlp")
 	if _, ok := svc.Selector["ml-operator/canary"]; ok {
-		t.Fatal("service selector matches canary pods")
+		t.Fatal("service selector must not carry the canary label")
 	}
 
 	// Strategy moves to RollingUpdate: the canary is removed. The

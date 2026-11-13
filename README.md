@@ -16,9 +16,9 @@ with the desired state.
 - [x] In-memory model registry (register, list, get, delete, watch)
 - [x] Reconciler core (desired vs live state, diff, apply plan)
 - [x] Deployment + Service rendering (image, replicas, resources, ports)
-- [ ] Rollout strategies (recreate, rolling update, canary)
+- [x] Rollout strategies (recreate, rolling update, canary)
 - [ ] Autoscaling (HPA from CPU / request-rate / GPU signals)
-- [ ] Health + readiness gates (model-load probe, traffic shift)
+- [ ] Health + readiness gates (model-load probe, traffic shift) — canary health gate done; model-load probe remains
 - [ ] Metrics + events (Prometheus, Kubernetes events)
 - [ ] CLI (`mlop`: apply, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
@@ -50,6 +50,7 @@ go run ./cmd/operator --demo
 - `internal/registry` — in-memory model registry + watch
 - `internal/controller` — reconciler (diff, apply plan, rollout)
 - `internal/render` — Deployment / Service / HPA rendering
+- `internal/rollout` — canary weight ladder, health gate, rollout state machine
 - `internal/metrics` — Prometheus metrics, events
 
 ## API reference
@@ -102,17 +103,55 @@ becomes `Failed` and never reaches the cluster), renders the desired
 state, diffs it against the live cluster, and applies the minimal
 plan — create, update, or a single `NoOp` when already in sync.
 `Recreate` image changes delete-then-create so versions never serve
-side by side; `Canary` renders a small extra Deployment
-(`<name>-canary`, weight-sized replicas, canary-only selector) and a
-strategy change away from `Canary` removes it. Status moves
-`Pending` → `Progressing` → `Available` (`Degraded` while serving
-below the replica count), with `Ready` / `Progressing` / `Available`
-conditions rebuilt every reconcile; a deployment that leaves the
-registry has its Deployment, canary and Service garbage-collected.
-The `Cluster` interface is the only cluster surface the reconciler
-needs, and `FakeCluster` implements it in memory for tests and the
-demo loop (new Deployments start at 0 ready replicas until `SetReady`
-simulates pods passing the gate).
+side by side. Status moves `Pending` → `Progressing` → `Available`
+(`Degraded` while serving below the replica count), with `Ready` /
+`Progressing` / `Available` conditions rebuilt every reconcile; a
+deployment that leaves the registry has its Deployment, canary and
+Service garbage-collected. The `Cluster` interface is the only
+cluster surface the reconciler needs, and `FakeCluster` implements
+it in memory for tests and the demo loop (new Deployments start at
+0 ready replicas until `SetReady` simulates pods passing the gate).
+
+### Canary rollouts
+
+`Canary` keeps the stable Deployment on the previous version while
+a small canary Deployment (`<name>-canary`) serves the new one. The
+traffic model is pod-count based: the Service selector matches both
+stable and canary pods, so traffic splits by ready-pod count, and
+the weight ladder sizes the canary. Stable pods carry
+`ml-operator/canary=false` and canary pods `=true`, and each
+Deployment's selector requires its own value, so neither Deployment
+adopts the other's pods.
+
+`internal/rollout` owns the decisions, pure and unit-tested:
+
+- `StepWeights` builds the ladder from the spec — initial weight,
+  even increments, last step always exactly 100% (e.g. weight 10,
+  3 steps → `[10 40 70 100]`; 0 steps means one jump to 100%).
+- `Evaluate` checks the health gate: minimum ready ratio (default
+  all canary pods ready), max error rate, max p95 latency (a 0
+  threshold disables that check). Zero ready replicas is *pending*,
+  not a failure — a fresh canary must not burn its failure budget
+  while its pods come up. Error rate and latency need a metrics
+  source, so the gate is readiness-only until the metrics phase.
+- The state machine holds, advances (once the step interval has
+  elapsed), promotes at the final weight, or aborts after 3
+  consecutive gate failures (configurable). A pass clears the
+  failure count, so one bad sample holds the rollout instead of
+  killing it.
+
+The reconciler drives the machine once per reconcile: it pins the
+stable Deployment to the live image until promotion, renders the
+canary at the current ladder weight, and acts on the decision —
+advance re-renders the canary at the next weight immediately,
+promote folds the new image into the stable Deployment and deletes
+the canary, abort deletes the canary and reports `Degraded` with no
+requeue (terminal for that generation; the stable Deployment keeps
+serving the previous version). Rollout state is per-deployment and
+resets on a new generation or canary-spec change; a done state is
+kept so the same generation never restarts. `operator --demo` runs
+a full canary rollout (10% → 55% → 100% → promote) against the
+fake cluster.
 
 ## License
 
