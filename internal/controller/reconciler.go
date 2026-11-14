@@ -75,6 +75,12 @@ type Result struct {
 // the previous version while the canary Deployment steps up its
 // traffic weight behind the health gate, and promotion folds the new
 // image into the stable Deployment and deletes the canary.
+//
+// For BlueGreen rollouts the same shape holds with a different
+// machine: the green Deployment soaks at full size beside the
+// stable one, the Service flips to green once the health gate
+// passes, and the next reconcile folds the green image into the
+// stable Deployment and deletes the green one.
 type Reconciler struct {
 	Registry *registry.Registry
 	Cluster  Cluster
@@ -92,6 +98,10 @@ type Reconciler struct {
 	// the map so a later reconcile of the same generation does not
 	// restart the rollout; a new generation resets it.
 	rollouts map[string]rollout.State
+	// blueGreens is the per-deployment blue-green rollout state,
+	// keyed by "namespace/name", with the same done-state rule as
+	// rollouts.
+	blueGreens map[string]rollout.BlueGreenState
 	// scalers is the per-deployment autoscaler state, keyed by
 	// "namespace/name". It holds the scale-down stabilization
 	// window; deleting a deployment drops its scaler.
@@ -101,12 +111,13 @@ type Reconciler struct {
 // New returns a Reconciler over reg and cluster.
 func New(reg *registry.Registry, cluster Cluster) *Reconciler {
 	return &Reconciler{
-		Registry: reg,
-		Cluster:  cluster,
-		Metrics:  metrics.NewCollector(),
-		Events:   metrics.NewRecorder(0),
-		rollouts: make(map[string]rollout.State),
-		scalers:  make(map[string]*autoscale.Scaler),
+		Registry:   reg,
+		Cluster:    cluster,
+		Metrics:    metrics.NewCollector(),
+		Events:     metrics.NewRecorder(0),
+		rollouts:   make(map[string]rollout.State),
+		blueGreens: make(map[string]rollout.BlueGreenState),
+		scalers:    make(map[string]*autoscale.Scaler),
 	}
 }
 
@@ -148,6 +159,43 @@ func (r *Reconciler) RestoreRolloutState(key string, s rollout.State) {
 	r.rollouts[key] = s
 }
 
+// BlueGreenState returns the blue-green rollout state the
+// reconciler tracks for key, or false when no blue-green rollout
+// is (or was) in flight for it. The mlop CLI reads it to report
+// rollout progress and to persist it, so a blue-green rollout
+// survives across CLI invocations.
+func (r *Reconciler) BlueGreenState(key string) (rollout.BlueGreenState, bool) {
+	s, ok := r.blueGreens[key]
+	return s, ok
+}
+
+// BlueGreenStates returns a copy of every blue-green rollout state
+// the reconciler tracks, keyed by "namespace/name".
+func (r *Reconciler) BlueGreenStates() map[string]rollout.BlueGreenState {
+	out := make(map[string]rollout.BlueGreenState, len(r.blueGreens))
+	for k, v := range r.blueGreens {
+		out[k] = v
+	}
+	return out
+}
+
+// RestoreBlueGreenState installs a blue-green rollout state loaded
+// from the state file. A restored state is only trusted when it
+// belongs to the same generation the deployment still has and the
+// deployment is still a BlueGreen rollout; a stale one is dropped
+// and the next reconcile starts a fresh rollout.
+func (r *Reconciler) RestoreBlueGreenState(key string, s rollout.BlueGreenState) {
+	entry := r.Registry.Get(key)
+	if entry == nil {
+		return
+	}
+	d := entry.Deployment
+	if d.Spec.Strategy != api.StrategyBlueGreen || d.Generation != s.Generation {
+		return
+	}
+	r.blueGreens[key] = s
+}
+
 // now returns the reconciler's clock.
 func (r *Reconciler) now() time.Time {
 	if r.Now != nil {
@@ -186,6 +234,24 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		rs, hasRollout = r.rolloutState(key, d), true
 	} else {
 		delete(r.rollouts, key)
+	}
+
+	// Blue-green rollouts keep their state across reconciles; any
+	// other strategy drops it, so returning to BlueGreen later
+	// starts fresh. A blue-green rollout only exists while a
+	// version change is in flight: with no live stable Deployment
+	// (first deploy) or no image change, the new image applies
+	// directly and there is nothing to soak, switch, or abort.
+	var bg rollout.BlueGreenState
+	var hasBlueGreen bool
+	if d.Spec.Strategy == api.StrategyBlueGreen {
+		if liveOK && liveStable.Container.Image != d.Spec.Model.Image {
+			bg, hasBlueGreen = r.blueGreenState(key, d), true
+		} else {
+			delete(r.blueGreens, key)
+		}
+	} else {
+		delete(r.blueGreens, key)
 	}
 
 	// Autoscaling: the scaler decides the effective replica count
@@ -252,13 +318,34 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 			canary = &c
 		}
 	}
+	var green *render.Deployment
 	desiredSvc := render.ServiceFor(d)
+	if hasBlueGreen {
+		// While the rollout is in flight (soaking or switched),
+		// the stable Deployment keeps serving the previous version
+		// until the fold. Only the image and version label are
+		// pinned — other spec changes still apply.
+		if liveOK && !(bg.Done && !bg.Aborted) {
+			desired.Container.Image = liveStable.Container.Image
+			desired.Labels["ml-operator/version"] = liveStable.Labels["ml-operator/version"]
+		}
+		if !bg.Done {
+			g := render.GreenDeploymentFor(d)
+			green = &g
+		}
+		// After the switch the live Service points at green; the
+		// desired Service must agree, or the plan would flip it
+		// back to blue before the fold.
+		if bg.Switched && !bg.Done {
+			desiredSvc = render.GreenServiceFor(d)
+		}
+	}
 	desiredHPA, hasHPA := render.HPAFor(d)
 
-	plan := r.plan(key, d, desired, desiredSvc, canary, desiredHPA, hasHPA)
+	plan := r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA)
 	actions := plan
 	for _, a := range plan {
-		if err := r.apply(a, desired, canary, desiredSvc, desiredHPA); err != nil {
+		if err := r.apply(a, desired, canary, green, desiredSvc, desiredHPA); err != nil {
 			// A failed apply is Degraded, not Failed: the spec is
 			// fine, the cluster operation is what broke, and the
 			// caller should retry.
@@ -276,6 +363,13 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		return r.reconcileCanary(key, d, rs, actions)
 	}
 
+	// A blue-green rollout in flight is judged after the apply: the
+	// gate reads the live green Deployment's readiness, and the
+	// state machine decides hold / switch / fold / abort.
+	if hasBlueGreen && !bg.Done {
+		return r.reconcileBlueGreen(key, d, bg, actions)
+	}
+
 	// A rollout that aborted for this generation stays Degraded:
 	// the stable Deployment still serves the previous version, not
 	// the desired one, so readiness alone must not flip the
@@ -289,6 +383,19 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 			serving = liveStable.Container.Image
 		}
 		msg := fmt.Sprintf("canary rollout aborted — stable still serves %s", serving)
+		r.updateStatus(key, d, api.PhaseDegraded, ready, msg)
+		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
+	}
+
+	// Same for a blue-green rollout that aborted: the green
+	// Deployment is gone, blue keeps serving the previous version.
+	if hasBlueGreen && bg.Done && bg.Aborted {
+		ready := r.Cluster.ReadyReplicas(key)
+		serving := ""
+		if liveOK {
+			serving = liveStable.Container.Image
+		}
+		msg := fmt.Sprintf("blue-green rollout aborted — stable still serves %s", serving)
 		r.updateStatus(key, d, api.PhaseDegraded, ready, msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
 	}
@@ -359,6 +466,17 @@ func (r *Reconciler) Plan(key string) ([]Action, error) {
 		}
 	}
 
+	var bg rollout.BlueGreenState
+	var hasBlueGreen bool
+	if d.Spec.Strategy == api.StrategyBlueGreen && liveOK && liveStable.Container.Image != d.Spec.Model.Image {
+		hasBlueGreen = true
+		if s, ok := r.blueGreens[key]; ok && s.Generation == d.Generation {
+			bg = s
+		} else {
+			bg = rollout.NewBlueGreen(d.Generation)
+		}
+	}
+
 	desired := render.DeploymentFor(d)
 	var canary *render.Deployment
 	if hasRollout {
@@ -374,8 +492,22 @@ func (r *Reconciler) Plan(key string) ([]Action, error) {
 		}
 	}
 	desiredSvc := render.ServiceFor(d)
+	var green *render.Deployment
+	if hasBlueGreen {
+		if liveOK && !(bg.Done && !bg.Aborted) {
+			desired.Container.Image = liveStable.Container.Image
+			desired.Labels["ml-operator/version"] = liveStable.Labels["ml-operator/version"]
+		}
+		if !bg.Done {
+			g := render.GreenDeploymentFor(d)
+			green = &g
+		}
+		if bg.Switched && !bg.Done {
+			desiredSvc = render.GreenServiceFor(d)
+		}
+	}
 	desiredHPA, hasHPA := render.HPAFor(d)
-	return r.plan(key, d, desired, desiredSvc, canary, desiredHPA, hasHPA), nil
+	return r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA), nil
 }
 
 // rolloutState returns the rollout state for key, starting a fresh
@@ -390,6 +522,20 @@ func (r *Reconciler) rolloutState(key string, d api.ModelDeployment) rollout.Sta
 	}
 	s := rollout.New(d.Generation, *d.Spec.Canary, r.now())
 	r.rollouts[key] = s
+	return s
+}
+
+// blueGreenState returns the blue-green rollout state for key,
+// starting a fresh one when there is none or the generation
+// changed. A done state is kept: it records that this generation
+// already folded or aborted, so reconciling the same generation
+// again never restarts the rollout.
+func (r *Reconciler) blueGreenState(key string, d api.ModelDeployment) rollout.BlueGreenState {
+	if s, ok := r.blueGreens[key]; ok && s.Generation == d.Generation {
+		return s
+	}
+	s := rollout.NewBlueGreen(d.Generation)
+	r.blueGreens[key] = s
 	return s
 }
 
@@ -527,14 +673,170 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	return Result{Actions: actions, Phase: phase, Requeue: true, Message: msg}, nil
 }
 
+// reconcileBlueGreen evaluates the health gate for an in-flight
+// blue-green rollout and acts on the state machine's decision. It
+// returns the reconcile result; the caller has already applied the
+// plan. A switched rollout folds on this reconcile (see
+// foldBlueGreen); a soaking one is judged by the gate.
+func (r *Reconciler) reconcileBlueGreen(key string, d api.ModelDeployment, bg rollout.BlueGreenState, actions []Action) (Result, error) {
+	ns, name, _ := strings.Cut(key, "/")
+	greenKey := ns + "/" + name + "-green"
+
+	if bg.Switched {
+		return r.foldBlueGreen(key, d, bg, greenKey, actions)
+	}
+
+	// The gate reads the live green Deployment's readiness plus the
+	// cluster metrics source when it reports: error rate, p95
+	// latency, and the model-load probe. Without metrics the gate
+	// stays readiness-only, as for a canary. The thresholds come
+	// from the rollout's own spec (blueGreen.gate, defaulted by
+	// ApplyDefaults to 5% errors / 500ms p95 / all pods ready).
+	var ev rollout.Evaluation
+	if liveGreen, ok := r.Cluster.GetDeployment(greenKey); ok {
+		sample := rollout.Sample{
+			ReadyReplicas:   r.Cluster.ReadyReplicas(greenKey),
+			DesiredReplicas: liveGreen.Replicas,
+		}
+		if m, ok := r.Cluster.Metrics(greenKey); ok {
+			sample.ErrorRate = m.ErrorRate
+			sample.LatencyP95Ms = m.LatencyP95Ms
+			sample.ModelLoadKnown = m.ModelLoadKnown
+			sample.ModelLoaded = m.ModelLoaded
+			sample.ModelLoadFailed = m.ModelLoadFailed
+		}
+		ev = rollout.Evaluate(gateForBlueGreen(d), sample)
+	} else {
+		ev = rollout.Evaluation{Pending: true, Reasons: []string{"green Deployment not created yet"}}
+	}
+
+	next, decision := rollout.BlueGreenNext(bg, ev, 0)
+	r.blueGreens[key] = next
+
+	stableReady := r.Cluster.ReadyReplicas(key)
+	desiredReplicas := int32(1)
+	if d.Spec.Replicas != nil {
+		desiredReplicas = *d.Spec.Replicas
+	}
+
+	switch decision {
+	case rollout.BlueGreenAbort:
+		// The green Deployment failed the gate too many times:
+		// remove it and report Degraded. The stable Deployment
+		// keeps serving the previous version. Terminal for this
+		// generation.
+		actions = withoutNoOp(actions)
+		if err := r.Cluster.DeleteDeployment(greenKey); err != nil {
+			return Result{Actions: actions}, err
+		}
+		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: greenKey,
+			Reason: fmt.Sprintf("blue-green aborted after %d failed health gates", next.Failures)})
+		msg := fmt.Sprintf("blue-green aborted after %d failed health gates: %s", next.Failures, strings.Join(ev.Reasons, "; "))
+		if r.Metrics != nil {
+			r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "aborted")
+		}
+		r.recordEvent(key, metrics.EventWarning, "BlueGreenAborted", msg)
+		r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
+
+	case rollout.BlueGreenSwitch:
+		// The gate passed: flip the Service to green, so clients
+		// move to the new version. The fold happens on the next
+		// reconcile — the switch is the commit point, and the
+		// fold that follows only makes green the new stable.
+		actions = withoutNoOp(actions)
+		if err := r.Cluster.ApplyService(render.GreenServiceFor(d)); err != nil {
+			msg := fmt.Sprintf("blue-green switch failed: %v", err)
+			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
+		}
+		actions = append(actions, Action{Kind: ActionUpdateService, Key: key,
+			Reason: fmt.Sprintf("blue-green switched: service now serves %q", d.Spec.Model.Image)})
+		msg := fmt.Sprintf("blue-green switched to %s — service now serves the new version", d.Spec.Model.Version)
+		r.recordEvent(key, metrics.EventNormal, "BlueGreenSwitched", msg)
+		r.updateStatus(key, d, api.PhaseProgressing, stableReady, msg)
+		return Result{Actions: actions, Phase: api.PhaseProgressing, Requeue: true, Message: msg}, nil
+	}
+
+	// Hold: green is still soaking. The phase is Progressing while
+	// the stable Deployment serves, Degraded only when it is below
+	// its replica count. Either way the caller must reconcile again
+	// — the rollout only finishes on fold or abort.
+	phase := api.PhaseProgressing
+	if stableReady < desiredReplicas && stableReady > 0 {
+		phase = api.PhaseDegraded
+	}
+	gateSummary := "gate passed"
+	if !ev.Pass {
+		gateSummary = "gate: " + strings.Join(ev.Reasons, "; ")
+	}
+	msg := fmt.Sprintf("blue-green soaking — %s", gateSummary)
+	r.updateStatus(key, d, phase, stableReady, msg)
+	return Result{Actions: actions, Phase: phase, Requeue: true, Message: msg}, nil
+}
+
+// foldBlueGreen ends a switched blue-green rollout: the stable
+// Deployment takes the new image, the Service flips back to blue
+// (which is now the new version), and the green Deployment is
+// deleted. The image being replaced becomes the rollback target:
+// it is recorded in status before the fold applies.
+func (r *Reconciler) foldBlueGreen(key string, d api.ModelDeployment, bg rollout.BlueGreenState, greenKey string, actions []Action) (Result, error) {
+	if liveStable, ok := r.Cluster.GetDeployment(key); ok {
+		d.Status.PreviousImage = liveStable.Container.Image
+		d.Status.PreviousVersion = liveStable.Labels["ml-operator/version"]
+	}
+	actions = withoutNoOp(actions)
+	promoted := render.DeploymentFor(d)
+	if err := r.Cluster.ApplyDeployment(promoted); err != nil {
+		msg := fmt.Sprintf("blue-green fold: apply stable Deployment failed: %v", err)
+		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
+		return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
+	}
+	actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: key,
+		Reason: fmt.Sprintf("blue-green folded: stable now serves %q", d.Spec.Model.Image)})
+	if err := r.Cluster.ApplyService(render.ServiceFor(d)); err != nil {
+		msg := fmt.Sprintf("blue-green fold: apply service failed: %v", err)
+		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
+		return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
+	}
+	actions = append(actions, Action{Kind: ActionUpdateService, Key: key, Reason: "blue-green folded: service back to stable"})
+	if err := r.Cluster.DeleteDeployment(greenKey); err != nil {
+		return Result{Actions: actions}, err
+	}
+	actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: greenKey, Reason: "blue-green folded"})
+	bg.Done = true
+	r.blueGreens[key] = bg
+
+	stableReady := r.Cluster.ReadyReplicas(key)
+	desiredReplicas := int32(1)
+	if d.Spec.Replicas != nil {
+		desiredReplicas = *d.Spec.Replicas
+	}
+	phase := api.PhaseProgressing
+	msg := fmt.Sprintf("blue-green folded — stable now serves %s (%d/%d replicas ready)",
+		d.Spec.Model.Version, stableReady, desiredReplicas)
+	if stableReady >= desiredReplicas {
+		phase = api.PhaseAvailable
+	} else if stableReady > 0 {
+		phase = api.PhaseDegraded
+	}
+	if r.Metrics != nil {
+		r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "promoted")
+	}
+	r.recordEvent(key, metrics.EventNormal, "BlueGreenPromoted", msg)
+	r.updateStatus(key, d, phase, stableReady, msg)
+	return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
+}
+
 // plan diffs the desired state against the live cluster and returns
 // the minimal ordered apply plan: Deployment first, then canary (if
-// any), then Service, then HPA. It never mutates the cluster. canary
-// is nil when no canary Deployment is desired for this reconcile —
-// either the strategy is not Canary, or the rollout already
-// finished. hasHPA is false when autoscaling is disabled: any live
-// HPA is then deleted as leftover.
-func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service, canary *render.Deployment, desiredHPA render.HPA, hasHPA bool) []Action {
+// any), then green (if any), then Service, then HPA. It never
+// mutates the cluster. canary is nil when no canary Deployment is
+// desired for this reconcile — either the strategy is not Canary,
+// or the rollout already finished. green is nil on the same terms
+// for a blue-green rollout. hasHPA is false when autoscaling is
+// disabled: any live HPA is then deleted as leftover.
+func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service, canary *render.Deployment, green *render.Deployment, desiredHPA render.HPA, hasHPA bool) []Action {
 	var actions []Action
 
 	live, ok := r.Cluster.GetDeployment(key)
@@ -570,6 +872,21 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey, Reason: "no canary deployment desired"})
 	}
 
+	greenKey := ns + "/" + name + "-green"
+	if green != nil {
+		liveGreen, ok := r.Cluster.GetDeployment(greenKey)
+		if !ok {
+			actions = append(actions, Action{Kind: ActionCreateDeployment, Key: greenKey, Reason: "green deployment does not exist"})
+		} else if reasons := render.DeploymentDiffReasons(*green, liveGreen); len(reasons) > 0 {
+			actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: greenKey, Reason: strings.Join(reasons, ", ")})
+		}
+	} else if _, ok := r.Cluster.GetDeployment(greenKey); ok {
+		// No green is desired: the strategy moved away from
+		// BlueGreen, or the rollout finished. Remove the leftover
+		// green Deployment so it stops serving.
+		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: greenKey, Reason: "no green deployment desired"})
+	}
+
 	liveSvc, ok := r.Cluster.GetService(key)
 	if !ok {
 		actions = append(actions, Action{Kind: ActionCreateService, Key: key, Reason: "service does not exist"})
@@ -598,7 +915,7 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 
 // apply executes one plan action against the cluster, resolving the
 // object from the desired state the plan was built from.
-func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.Deployment, svc render.Service, hpa render.HPA) error {
+func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.Deployment, green *render.Deployment, svc render.Service, hpa render.HPA) error {
 	switch a.Kind {
 	case ActionCreateDeployment, ActionUpdateDeployment:
 		stableKey := desired.Namespace + "/" + desired.Name
@@ -609,6 +926,12 @@ func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.D
 			canaryKey := canary.Namespace + "/" + canary.Name
 			if a.Key == canaryKey {
 				return r.Cluster.ApplyDeployment(*canary)
+			}
+		}
+		if green != nil {
+			greenKey := green.Namespace + "/" + green.Name
+			if a.Key == greenKey {
+				return r.Cluster.ApplyDeployment(*green)
 			}
 		}
 		return fmt.Errorf("no desired deployment for key %q", a.Key)
@@ -630,15 +953,18 @@ func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.D
 
 // reconcileDeleted removes the cluster objects owned by a deployment
 // that left the registry: stable Deployment, canary Deployment (if
-// any), Service, and HPA. Deleting something already gone is a
-// no-op. The autoscaler state goes too, so a later deployment with
-// the same name starts with a fresh stabilization window.
+// any), green Deployment (if any), Service, and HPA. Deleting
+// something already gone is a no-op. The autoscaler state goes too,
+// so a later deployment with the same name starts with a fresh
+// stabilization window.
 func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
 	delete(r.rollouts, key)
+	delete(r.blueGreens, key)
 	delete(r.scalers, key)
 	var actions []Action
 	ns, name, _ := strings.Cut(key, "/")
 	canaryKey := ns + "/" + name + "-canary"
+	greenKey := ns + "/" + name + "-green"
 
 	for _, target := range []struct {
 		kind ActionKind
@@ -648,6 +974,7 @@ func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
 	}{
 		{ActionDeleteDeployment, key, r.hasDeployment, r.Cluster.DeleteDeployment},
 		{ActionDeleteDeployment, canaryKey, r.hasDeployment, r.Cluster.DeleteDeployment},
+		{ActionDeleteDeployment, greenKey, r.hasDeployment, r.Cluster.DeleteDeployment},
 		{ActionDeleteService, key, r.hasService, r.Cluster.DeleteService},
 		{ActionDeleteHPA, key, r.hasHPA, r.Cluster.DeleteHPA},
 	} {
@@ -737,14 +1064,34 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 // canary spec always carries a non-nil gate by here; the nil guard
 // only covers direct callers that skip defaults.
 func gateFor(d api.ModelDeployment) rollout.Gate {
-	if d.Spec.Canary == nil || d.Spec.Canary.Gate == nil {
+	if d.Spec.Canary == nil {
+		return gateFromSpec(nil)
+	}
+	return gateFromSpec(d.Spec.Canary.Gate)
+}
+
+// gateForBlueGreen builds the health gate for a blue-green rollout
+// from the spec's gate thresholds, with the same nil-guard rule as
+// gateFor: a missing blueGreen block or gate takes the operator
+// defaults.
+func gateForBlueGreen(d api.ModelDeployment) rollout.Gate {
+	if d.Spec.BlueGreen == nil {
+		return gateFromSpec(nil)
+	}
+	return gateFromSpec(d.Spec.BlueGreen.Gate)
+}
+
+// gateFromSpec converts an API gate spec into a rollout Gate. A nil
+// spec takes the operator defaults (5% errors, 500ms p95, all pods
+// ready).
+func gateFromSpec(g *api.GateSpec) rollout.Gate {
+	if g == nil {
 		return rollout.Gate{
 			MaxErrorRate:    api.DefaultGateMaxErrorRate,
 			MaxLatencyP95Ms: api.DefaultGateMaxP95LatencyMs,
 			MinReadyRatio:   api.DefaultGateMinReadyRatio,
 		}
 	}
-	g := d.Spec.Canary.Gate
 	return rollout.Gate{
 		MaxErrorRate:    g.MaxErrorRate,
 		MaxLatencyP95Ms: g.MaxP95LatencyMs,
