@@ -342,6 +342,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			sample.LatencyP95Ms = m.LatencyP95Ms
 			sample.ModelLoadKnown = m.ModelLoadKnown
 			sample.ModelLoaded = m.ModelLoaded
+			sample.ModelLoadFailed = m.ModelLoadFailed
 		}
 		ev = rollout.Evaluate(gateFor(d), sample)
 	} else {

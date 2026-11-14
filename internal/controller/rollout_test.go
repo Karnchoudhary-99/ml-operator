@@ -393,3 +393,137 @@ func TestReconcileRecordsPreviousImage(t *testing.T) {
 		}
 	})
 }
+
+// TestReconcileCanaryModelLoadHoldsThenPromotes proves the
+// model-load probe gates a real rollout: a canary whose pods are
+// ready but whose model is still loading holds (pending, never a
+// failure), and once the model loads the rollout advances and
+// promotes normally.
+func TestReconcileCanaryModelLoadHoldsThenPromotes(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	availableV1(t, reg, cluster, rec)
+
+	// Controllable clock: ApplyDefaults turns a 0 canary interval
+	// into the 30s default, so advances wait out the interval.
+	now := time.Now()
+	rec.Now = func() time.Time { return now }
+
+	reg.Register(canaryDep(2, 10, 2, 0))
+
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Actions) != 1 || res.Actions[0].Key != "default/iris-mlp-canary" {
+		t.Fatalf("actions = %v, want a single canary create", res.Actions)
+	}
+
+	// Pods ready, model still loading: the gate is pending, so the
+	// rollout holds at 10% — and holds again on the next reconcile
+	// too, without burning any failure budget.
+	cluster.SetReady("default/iris-mlp-canary", 1)
+	cluster.SetModelLoading("default/iris-mlp-canary")
+	for i := 0; i < 3; i++ {
+		res, err = rec.Reconcile("default/iris-mlp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Phase != api.PhaseProgressing || !res.Requeue {
+			t.Fatalf("loading reconcile %d: phase=%s requeue=%v, want Progressing/true", i+1, res.Phase, res.Requeue)
+		}
+		if canary, _ := cluster.GetDeployment("default/iris-mlp-canary"); canary.Replicas != 1 {
+			t.Fatalf("loading reconcile %d: canary replicas = %d, want 1 (still at 10%%)", i+1, canary.Replicas)
+		}
+	}
+
+	// The model loads: the gate passes and the rollout advances
+	// through 55% to 100%, then promotes. Each step waits out the
+	// 30s interval on the controllable clock.
+	cluster.SetModelLoaded("default/iris-mlp-canary")
+	now = now.Add(30 * time.Second)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Actions) != 1 || res.Actions[0].Kind != ActionUpdateDeployment {
+		t.Fatalf("actions = %v, want a canary update (advance to 55%%)", res.Actions)
+	}
+	now = now.Add(30 * time.Second)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canary, _ := cluster.GetDeployment("default/iris-mlp-canary"); canary.Replicas != 2 {
+		t.Fatalf("canary replicas = %d, want 2 (100%%)", canary.Replicas)
+	}
+	cluster.SetReady("default/iris-mlp-canary", 2)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := cluster.GetDeployment("default/iris-mlp"); got.Container.Image != "registry.example.com/iris-mlp:v2" {
+		t.Fatalf("stable image = %s, want v2 after promotion", got.Container.Image)
+	}
+	if _, ok := cluster.GetDeployment("default/iris-mlp-canary"); ok {
+		t.Fatal("canary Deployment was not deleted on promotion")
+	}
+	if res.Phase != api.PhaseAvailable || res.Requeue {
+		t.Fatalf("phase=%s requeue=%v, want Available/false", res.Phase, res.Requeue)
+	}
+}
+
+// TestReconcileCanaryModelLoadFailureAborts proves a canary whose
+// model failed to load aborts after three consecutive failed
+// gates — the same three-strikes rule as any other gate failure —
+// with the stable Deployment still serving v1.
+func TestReconcileCanaryModelLoadFailureAborts(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	availableV1(t, reg, cluster, rec)
+	reg.Register(canaryDep(2, 50, 2, 0))
+
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Actions) != 1 || res.Actions[0].Key != "default/iris-mlp-canary" {
+		t.Fatalf("actions = %v, want a single canary create", res.Actions)
+	}
+
+	// Pods ready, but the probe says the model failed to load:
+	// two strikes hold the rollout, the third aborts it.
+	cluster.SetReady("default/iris-mlp-canary", 1)
+	cluster.SetModelLoadFailed("default/iris-mlp-canary")
+	for i := 0; i < 2; i++ {
+		res, err = rec.Reconcile("default/iris-mlp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Phase != api.PhaseProgressing || !res.Requeue {
+			t.Fatalf("failure %d: phase=%s requeue=%v, want Progressing/true", i+1, res.Phase, res.Requeue)
+		}
+		if _, ok := cluster.GetDeployment("default/iris-mlp-canary"); !ok {
+			t.Fatalf("failure %d: canary deleted too early", i+1)
+		}
+	}
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Phase != api.PhaseDegraded || res.Requeue {
+		t.Fatalf("phase=%s requeue=%v, want Degraded/false", res.Phase, res.Requeue)
+	}
+	if _, ok := cluster.GetDeployment("default/iris-mlp-canary"); ok {
+		t.Fatal("canary Deployment was not deleted on abort")
+	}
+	if got, _ := cluster.GetDeployment("default/iris-mlp"); got.Container.Image != "registry.example.com/iris-mlp:v1" {
+		t.Fatalf("stable image = %s, want v1 after abort", got.Container.Image)
+	}
+	// The next reconcile does not restart the rollout.
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Actions) != 1 || res.Actions[0].Kind != ActionNoOp {
+		t.Fatalf("actions = %v, want a single NoOp (aborted rollout stays aborted)", res.Actions)
+	}
+}
