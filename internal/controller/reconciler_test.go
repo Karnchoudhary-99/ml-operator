@@ -24,7 +24,7 @@ func dep(name string, gen int64) api.ModelDeployment {
 	}
 }
 
-func setup(t *testing.T) (*registry.Registry, *FakeCluster, *Reconciler) {
+func setup(t testing.TB) (*registry.Registry, *FakeCluster, *Reconciler) {
 	t.Helper()
 	reg := registry.New()
 	cluster := NewFakeCluster()
