@@ -132,3 +132,7 @@ func TestGoldenHPA(t *testing.T) {
 func TestGoldenCanaryDeployment(t *testing.T) {
 	checkGolden(t, "canary.json", CanaryDeploymentForWeight(canonicalDeployment(), 10))
 }
+
+func TestGoldenGreenDeployment(t *testing.T) {
+	checkGolden(t, "green.json", GreenDeploymentFor(canonicalDeployment()))
+}

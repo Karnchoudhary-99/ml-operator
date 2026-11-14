@@ -8,6 +8,7 @@
   },
   "Selector": {
     "app.kubernetes.io/name": "iris-mlp",
+    "ml-operator/green": "false",
     "ml-operator/managed-by": "ml-operator"
   },
   "Port": 80,
