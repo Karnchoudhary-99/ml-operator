@@ -43,11 +43,11 @@ const (
 
 // Action is one step of an apply plan.
 type Action struct {
-	Kind ActionKind
+	Kind ActionKind `json:"kind"`
 	// Key is the "namespace/name" of the object acted on.
-	Key string
+	Key string `json:"key"`
 	// Reason is a human-readable why, e.g. `image "v1" -> "v2"`.
-	Reason string
+	Reason string `json:"reason"`
 }
 
 // Result is the outcome of one Reconcile call.
@@ -315,6 +315,67 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 	}
 	r.updateStatus(key, d, phase, ready, msg)
 	return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
+}
+
+// Plan returns the apply plan Reconcile would execute for key,
+// without changing anything: no cluster writes, no status writes,
+// no metrics, no events, and no scaler or rollout state changes.
+// It is what `mlop diff` shows before an apply, so an operator can
+// review exactly what a manifest change would do.
+//
+// Two deliberate differences from Reconcile: with autoscaling on,
+// the plan uses the live replica count as the effective count (the
+// scaler's decision consumes the latest metrics sample and mutates
+// its stabilization window, so a read-only plan must not ask it);
+// and a canary with no stored rollout state is planned from a fresh
+// first-weight state built locally, never stored.
+func (r *Reconciler) Plan(key string) ([]Action, error) {
+	entry := r.Registry.Get(key)
+	if entry == nil {
+		return nil, fmt.Errorf("no deployment %q", key)
+	}
+	d := entry.Deployment
+	api.ApplyDefaults(&d)
+	if errs := api.Validate(&d); len(errs) > 0 {
+		return nil, fmt.Errorf("invalid spec: %s", strings.Join(errorStrings(errs), "; "))
+	}
+
+	liveStable, liveOK := r.Cluster.GetDeployment(key)
+
+	if d.Spec.Autoscaling != nil && liveOK {
+		effective := liveStable.Replicas
+		d.Spec.Replicas = &effective
+	}
+
+	var rs rollout.State
+	var hasRollout bool
+	if d.Spec.Strategy == api.StrategyCanary && d.Spec.Canary != nil {
+		hasRollout = true
+		if s, ok := r.rollouts[key]; ok && s.Generation == d.Generation &&
+			equalWeights(s.Weights, rollout.StepWeights(*d.Spec.Canary)) {
+			rs = s
+		} else {
+			rs = rollout.New(d.Generation, *d.Spec.Canary, r.now())
+		}
+	}
+
+	desired := render.DeploymentFor(d)
+	var canary *render.Deployment
+	if hasRollout {
+		if liveOK && !(rs.Done && !rs.Aborted) {
+			// Same pinning as Reconcile: the stable Deployment
+			// keeps serving the previous version until promotion.
+			desired.Container.Image = liveStable.Container.Image
+			desired.Labels["ml-operator/version"] = liveStable.Labels["ml-operator/version"]
+		}
+		if !rs.Done {
+			c := render.CanaryDeploymentForWeight(d, rs.CurrentWeight())
+			canary = &c
+		}
+	}
+	desiredSvc := render.ServiceFor(d)
+	desiredHPA, hasHPA := render.HPAFor(d)
+	return r.plan(key, d, desired, desiredSvc, canary, desiredHPA, hasHPA), nil
 }
 
 // rolloutState returns the rollout state for key, starting a fresh
