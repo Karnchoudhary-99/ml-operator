@@ -93,6 +93,15 @@ type Reconciler struct {
 	// (never nil); callers may replace them to read the output.
 	Metrics *metrics.Collector
 	Events  *metrics.Recorder
+	// ApplyMaxAttempts is how many times one cluster operation is
+	// tried before the reconcile gives up on it (default 3, set by
+	// New; 0 means the default). A transient cluster error — a
+	// timeout, an etcd hiccup — is retried, not fatal.
+	ApplyMaxAttempts int
+	// ApplyRetryBackoff is the base delay between attempts; each
+	// retry waits twice the previous one (default 100ms, set by
+	// New). Tests set it to 0 for instant retries.
+	ApplyRetryBackoff time.Duration
 
 	// rollouts is the per-deployment canary rollout state, keyed by
 	// "namespace/name". A done state (promoted or aborted) stays in
@@ -118,14 +127,16 @@ type Reconciler struct {
 // New returns a Reconciler over reg and cluster.
 func New(reg *registry.Registry, cluster Cluster) *Reconciler {
 	return &Reconciler{
-		Registry:   reg,
-		Cluster:    cluster,
-		Metrics:    metrics.NewCollector(),
-		Events:     metrics.NewRecorder(0),
-		rollouts:   make(map[string]rollout.State),
-		blueGreens: make(map[string]rollout.BlueGreenState),
-		scalers:    make(map[string]*autoscale.Scaler),
-		histories:  make(map[string]*history.Log),
+		Registry:          reg,
+		Cluster:           cluster,
+		Metrics:           metrics.NewCollector(),
+		Events:            metrics.NewRecorder(0),
+		ApplyMaxAttempts:  3,
+		ApplyRetryBackoff: 100 * time.Millisecond,
+		rollouts:          make(map[string]rollout.State),
+		blueGreens:        make(map[string]rollout.BlueGreenState),
+		scalers:           make(map[string]*autoscale.Scaler),
+		histories:         make(map[string]*history.Log),
 	}
 }
 
@@ -387,7 +398,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 	plan := r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA)
 	actions := plan
 	for _, a := range plan {
-		if err := r.apply(a, desired, canary, green, desiredSvc, desiredHPA); err != nil {
+		if _, err := r.applyWithRetry(a, desired, canary, green, desiredSvc, desiredHPA); err != nil {
 			// A failed apply is Degraded, not Failed: the spec is
 			// fine, the cluster operation is what broke, and the
 			// caller should retry.
@@ -953,6 +964,51 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 		return []Action{{Kind: ActionNoOp, Key: key, Reason: "live state matches desired state"}}
 	}
 	return actions
+}
+
+// maxApplyAttempts returns the configured attempt budget,
+// defaulting to 3 when the field was left at 0 (e.g. a Reconciler
+// built without New).
+func (r *Reconciler) maxApplyAttempts() int {
+	if r.ApplyMaxAttempts <= 0 {
+		return 3
+	}
+	return r.ApplyMaxAttempts
+}
+
+// retryClusterCall runs fn, retrying it on error with exponential
+// backoff until the attempt budget is spent. It returns how many
+// retries were needed (0 = the first try worked) and the last
+// error, or nil when a try succeeded. The backoff doubles per
+// retry (base, 2x base, 4x base, …); a zero backoff retries
+// immediately, which is what tests use. Only transient failures
+// should reach this helper: the caller validates the spec before
+// any apply, so a repeated failure here is a cluster problem, not
+// a bad deployment.
+func (r *Reconciler) retryClusterCall(fn func() error) (int, error) {
+	backoff := r.ApplyRetryBackoff
+	var err error
+	for attempt := 0; attempt < r.maxApplyAttempts(); attempt++ {
+		if err = fn(); err == nil {
+			return attempt, nil
+		}
+		if attempt+1 < r.maxApplyAttempts() && backoff > 0 {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return r.maxApplyAttempts() - 1, err
+}
+
+// applyWithRetry executes one plan action against the cluster,
+// retrying transient failures with exponential backoff. It
+// returns how many retries were needed and the final error (nil
+// when the action applied). A NoOp never touches the cluster, so
+// it never retries.
+func (r *Reconciler) applyWithRetry(a Action, desired render.Deployment, canary *render.Deployment, green *render.Deployment, svc render.Service, hpa render.HPA) (int, error) {
+	return r.retryClusterCall(func() error {
+		return r.apply(a, desired, canary, green, svc, hpa)
+	})
 }
 
 // apply executes one plan action against the cluster, resolving the
