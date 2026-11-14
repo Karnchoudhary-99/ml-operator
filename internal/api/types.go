@@ -1,5 +1,7 @@
 package api
 
+import "time"
+
 // Phase is the lifecycle phase of a ModelDeployment, reported in status.
 type Phase string
 
@@ -210,12 +212,17 @@ type ModelDeploymentStatus struct {
 }
 
 // Condition is a single status condition, following the Kubernetes
-// condition conventions (Type/Status/Reason/Message).
+// condition conventions (Type/Status/Reason/Message). LastTransitionTime
+// is the last time the Status value changed: an operator (or a human
+// reading `mlop status`) can tell how long a deployment has been
+// Degraded, or when it last became Available, without digging through
+// the event log. It is stamped by SetConditionAt, never set by hand.
 type Condition struct {
-	Type    string
-	Status  string // "True", "False", "Unknown"
-	Reason  string
-	Message string
+	Type               string    `json:"type"`
+	Status             string    `json:"status"` // "True", "False", "Unknown"
+	Reason             string    `json:"reason"`
+	Message            string    `json:"message"`
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
 }
 
 // ConditionFor returns the condition of the given type, or nil.
@@ -228,14 +235,40 @@ func (s *ModelDeploymentStatus) ConditionFor(condType string) *Condition {
 	return nil
 }
 
-// SetCondition upserts a condition of the given type.
+// SetCondition upserts a condition of the given type, stamping the
+// transition time with the wall clock. See SetConditionAt for the
+// semantics.
 func (s *ModelDeploymentStatus) SetCondition(c Condition) {
+	s.SetConditionAt(c, time.Now())
+}
+
+// SetConditionAt upserts a condition of the given type, following the
+// Kubernetes transition-time rules:
+//
+//   - a brand-new condition type is stamped with now;
+//   - an update that keeps the same Status keeps the old
+//     LastTransitionTime (only Reason/Message change — the condition
+//     did not transition);
+//   - a Status flip is stamped with now.
+//
+// A stored condition with a zero LastTransitionTime (e.g. loaded from
+// a state file written before transition times existed) is stamped
+// with now on first sight: the operator just observed it in this
+// state, and the clock is the source of truth from here on.
+func (s *ModelDeploymentStatus) SetConditionAt(c Condition, now time.Time) {
 	for i := range s.Conditions {
 		if s.Conditions[i].Type == c.Type {
+			old := s.Conditions[i]
+			if old.Status == c.Status && !old.LastTransitionTime.IsZero() {
+				c.LastTransitionTime = old.LastTransitionTime
+			} else {
+				c.LastTransitionTime = now
+			}
 			s.Conditions[i] = c
 			return
 		}
 	}
+	c.LastTransitionTime = now
 	s.Conditions = append(s.Conditions, c)
 }
 
