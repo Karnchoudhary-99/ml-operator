@@ -16,6 +16,12 @@ mlop rollout status iris-mlp                  # weight, step, gate failures
 mlop status iris-mlp                          # phase + readiness
 ```
 
+`mlop status` also lists the conditions with the reason each one
+holds and how long it has held it (`Ready: True (ReplicasAvailable)
+— 5m ago`), so a stuck deployment shows its age at a glance. The
+same data is in `mlop status --json` as `lastTransitionTime` per
+condition.
+
 A canary advances only while the health gate passes (error rate,
 p95 latency, model-load probe, canary readiness). While it is in
 flight, `mlop status` re-reconciles on every call, so the rollout

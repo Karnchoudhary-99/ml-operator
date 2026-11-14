@@ -27,6 +27,7 @@ with the desired state.
 - [x] Metrics HTTP endpoint (`--metrics-addr`, `/metrics` + `/healthz`)
 - [x] Deployment history audit trail (`mlop history`)
 - [x] CLI (`mlop`: apply, diff, status, logs, rollout) + demo
+- [x] Status conditions with reasons + transition times (`mlop status` shows how long each condition has held)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -257,7 +258,9 @@ plan — create, update, or a single `NoOp` when already in sync.
 `Recreate` image changes delete-then-create so versions never serve
 side by side. Status moves `Pending` → `Progressing` → `Available`
 (`Degraded` while serving below the replica count), with `Ready` /
-`Progressing` / `Available` conditions rebuilt every reconcile; a
+`Progressing` / `Available` conditions rebuilt every reconcile; each
+condition carries a real reason and a `lastTransitionTime`, so
+`mlop status` shows how long it has held (`5m ago`, `2h ago`) — a
 deployment that leaves the registry has its Deployment, canary and
 Service garbage-collected. The `Cluster` interface is the only
 cluster surface the reconciler needs, and `FakeCluster` implements
