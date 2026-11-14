@@ -8,26 +8,32 @@ import (
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
 )
 
-// cmdReady implements `mlop ready <name> --replicas N [--canary]`.
+// cmdReady implements `mlop ready <name> --replicas N [--canary | --green]`.
 // The fake cluster has no pods, so nothing ever becomes ready on
 // its own: this command is the CLI's way of simulating pods passing
 // the readiness gate, the same role SetReady plays in tests and the
 // demo. It reconciles afterwards, so `mlop status` shows the new
 // phase immediately. --canary targets the canary Deployment
-// (<name>-canary) instead of the stable one.
+// (<name>-canary) instead of the stable one; --green targets the
+// green Deployment (<name>-green) of a blue-green rollout.
 func cmdReady(opts *options, args []string) int {
 	fs := flag.NewFlagSet("ready", flag.ContinueOnError)
 	fs.SetOutput(opts.stderr)
 	fs.Usage = func() {
-		fmt.Fprint(opts.stderr, "Usage: mlop ready <name> --replicas N [--canary]\n")
+		fmt.Fprint(opts.stderr, "Usage: mlop ready <name> --replicas N [--canary | --green]\n")
 	}
 	replicas := fs.Int("replicas", -1, "how many pods pass the readiness gate")
 	canary := fs.Bool("canary", false, "target the canary Deployment instead of the stable one")
+	green := fs.Bool("green", false, "target the green Deployment instead of the stable one")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(opts.stderr, "mlop ready: exactly one deployment name is required")
+		return 2
+	}
+	if *canary && *green {
+		fmt.Fprintln(opts.stderr, "mlop ready: --canary and --green are mutually exclusive")
 		return 2
 	}
 	if *replicas < 0 {
@@ -39,6 +45,10 @@ func cmdReady(opts *options, args []string) int {
 	if *canary {
 		ns, name, _ := strings.Cut(key, "/")
 		target = ns + "/" + name + "-canary"
+	}
+	if *green {
+		ns, name, _ := strings.Cut(key, "/")
+		target = ns + "/" + name + "-green"
 	}
 
 	st, err := store.Load(opts.statePath)
@@ -55,6 +65,9 @@ func cmdReady(opts *options, args []string) int {
 		hint := " (apply first)"
 		if *canary {
 			hint = " (the canary Deployment is created by a canary apply)"
+		}
+		if *green {
+			hint = " (the green Deployment is created by a blue-green apply)"
 		}
 		fmt.Fprintf(opts.stderr, "mlop ready: no Deployment %q in the cluster yet%s\n", target, hint)
 		return 1

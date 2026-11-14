@@ -310,6 +310,97 @@ spec:
     intervalSeconds: 1
 `
 
+const irisBlueGreen = `
+name: iris-mlp
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v2
+    framework: onnx
+    version: v2
+  replicas: 2
+  strategy: BlueGreen
+  blueGreen:
+    gate:
+      maxErrorRate: 0.05
+      maxP95LatencyMs: 500
+      minReadyRatio: 1.0
+`
+
+const irisBlueGreenV1 = `
+name: iris-mlp
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 2
+  strategy: BlueGreen
+`
+
+func TestBlueGreenFlowThroughCLI(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	// A first deploy under BlueGreen has no version change in
+	// flight: no green Deployment, no rollout to report.
+	v1bg := writeManifest(t, irisBlueGreenV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", v1bg); code != 0 {
+		t.Fatalf("apply blue-green v1 failed")
+	}
+	code, out, _ := runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "no blue-green rollout in flight") {
+		t.Fatalf("rollout status exit %d, out %q", code, out)
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready v1 failed")
+	}
+
+	bg := writeManifest(t, irisBlueGreen)
+	code, out, _ = runCLIState(t, state, "apply", "-f", bg)
+	if code != 0 || !strings.Contains(out, "(generation 2)") {
+		t.Fatalf("blue-green apply exit %d, out %q", code, out)
+	}
+	// Green soaks: the rollout status reconciles first, and the
+	// gate is pending (0 green pods ready).
+	code, out, _ = runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "state:      soaking") {
+		t.Fatalf("rollout soaking exit %d, out %q", code, out)
+	}
+	// A diff before the cutover previews nothing left to do: the
+	// green Deployment already exists and stable is pinned.
+	code, out, _ = runCLIState(t, state, "diff", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "in sync") {
+		t.Fatalf("diff exit %d, out %q", code, out)
+	}
+	// Green pods come up: the ready command's reconcile switches
+	// the Service to green (phase Progressing — the fold lands on
+	// the next reconcile).
+	code, out, _ = runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2", "--green")
+	if code != 0 || !strings.Contains(out, "phase=Progressing") {
+		t.Fatalf("ready green exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "logs", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "BlueGreenSwitched") {
+		t.Fatalf("logs after switch exit %d, out %q", code, out)
+	}
+	// The rollout status reconciles first, so it folds green into
+	// stable and reports the fold.
+	code, out, _ = runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "state:      folded") {
+		t.Fatalf("rollout fold exit %d, out %q", code, out)
+	}
+	// The fold is in the event log, and v2 is live.
+	code, out, _ = runCLIState(t, state, "logs", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "BlueGreenPromoted") {
+		t.Fatalf("logs after fold exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "registry.example.com/iris-mlp:v2") {
+		t.Fatalf("status after fold exit %d, out %q", code, out)
+	}
+	// --canary and --green are mutually exclusive.
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2", "--canary", "--green"); code == 0 {
+		t.Fatalf("ready with both --canary and --green should fail")
+	}
+}
 func TestRollbackFlow(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 
