@@ -8,30 +8,36 @@ import (
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
 )
 
-// cmdLoad implements `mlop load <name> [--canary] [--fail]`.
+// cmdLoad implements `mlop load <name> [--canary] [--loading | --fail]`.
 // The fake cluster has no serving containers, so the model-load
 // probe never reports on its own: this command is the CLI's way of
-// simulating the probe, the same role SetModelLoaded /
-// SetModelLoadFailed play in tests and the demo. By default it
-// reports the model loaded; --fail reports a failed load (bad
-// artifact, OOM, missing weights). It reconciles afterwards, so a
-// canary gate sees the probe outcome immediately: a loading model
-// holds the rollout, a failed load burns failure budget and aborts
-// it after three strikes. --canary targets the canary Deployment
-// (<name>-canary) instead of the stable one.
+// simulating the probe, the same role SetModelLoading /
+// SetModelLoaded / SetModelLoadFailed play in tests and the demo.
+// By default it reports the model loaded; --loading reports it
+// still loading, --fail reports a failed load (bad artifact, OOM,
+// missing weights). It reconciles afterwards, so a canary gate sees
+// the probe outcome immediately: a loading model holds the rollout
+// without burning failure budget, a failed load burns budget and
+// aborts it after three strikes. --canary targets the canary
+// Deployment (<name>-canary) instead of the stable one.
 func cmdLoad(opts *options, args []string) int {
 	fs := flag.NewFlagSet("load", flag.ContinueOnError)
 	fs.SetOutput(opts.stderr)
 	fs.Usage = func() {
-		fmt.Fprint(opts.stderr, "Usage: mlop load <name> [--canary] [--fail]\n")
+		fmt.Fprint(opts.stderr, "Usage: mlop load <name> [--canary] [--loading | --fail]\n")
 	}
 	canary := fs.Bool("canary", false, "target the canary Deployment instead of the stable one")
+	loading := fs.Bool("loading", false, "report that the model is still loading")
 	fail := fs.Bool("fail", false, "report that the model failed to load instead of loaded")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(opts.stderr, "mlop load: exactly one deployment name is required")
+		return 2
+	}
+	if *loading && *fail {
+		fmt.Fprintln(opts.stderr, "mlop load: --loading and --fail are mutually exclusive")
 		return 2
 	}
 	key := resolveKey(fs.Arg(0))
@@ -60,10 +66,14 @@ func cmdLoad(opts *options, args []string) int {
 		return 1
 	}
 	outcome := "loaded"
-	if *fail {
+	switch {
+	case *fail:
 		rt.Cluster.SetModelLoadFailed(target)
 		outcome = "failed to load"
-	} else {
+	case *loading:
+		rt.Cluster.SetModelLoading(target)
+		outcome = "still loading"
+	default:
 		rt.Cluster.SetModelLoaded(target)
 	}
 	res, err := rt.Reconciler.Reconcile(key)

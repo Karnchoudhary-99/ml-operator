@@ -398,7 +398,15 @@ func TestLoadCommand(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "model failed to load for default/iris-mlp") {
 		t.Fatalf("load --fail exit %d, out %q", code, out)
 	}
-	code, _, errOut := runCLIState(t, state, "load", "nope")
+	code, out, _ = runCLIState(t, state, "load", "iris-mlp", "--loading")
+	if code != 0 || !strings.Contains(out, "model still loading for default/iris-mlp") {
+		t.Fatalf("load --loading exit %d, out %q", code, out)
+	}
+	code, _, errOut := runCLIState(t, state, "load", "iris-mlp", "--loading", "--fail")
+	if code == 0 || !strings.Contains(errOut, "mutually exclusive") {
+		t.Fatalf("load --loading --fail exit %d, err %q", code, errOut)
+	}
+	code, _, errOut = runCLIState(t, state, "load", "nope")
 	if code == 0 || !strings.Contains(errOut, "no deployment") {
 		t.Fatalf("load unknown exit %d, err %q", code, errOut)
 	}
