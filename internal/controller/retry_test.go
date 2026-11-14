@@ -89,6 +89,46 @@ func TestApplyRetryExhausts(t *testing.T) {
 	}
 }
 
+func TestApplyRetryIdempotent(t *testing.T) {
+	// A retried update must land exactly once, with the right
+	// content, and must not disturb the running Deployment:
+	// re-applying does not reset readiness or duplicate objects.
+	reg, cluster, rec := setup(t)
+	rec.ApplyRetryBackoff = 0
+	reg.Register(dep("iris-mlp", 1))
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	cluster.SetReady("default/iris-mlp", 2)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+
+	d := dep("iris-mlp", 2)
+	d.Spec.Model.Image = "registry.example.com/iris-mlp:v2"
+	d.Spec.Model.Version = "v2"
+	reg.Register(d)
+	cluster.FailNextApplies(2)
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.Phase != api.PhaseAvailable {
+		t.Fatalf("phase = %s, want Available (ready pods survived the retry)", res.Phase)
+	}
+	if cluster.DeploymentCount() != 1 || cluster.ServiceCount() != 1 {
+		t.Fatalf("cluster holds %d deployments / %d services, want 1/1",
+			cluster.DeploymentCount(), cluster.ServiceCount())
+	}
+	live, _ := cluster.GetDeployment("default/iris-mlp")
+	if live.Container.Image != "registry.example.com/iris-mlp:v2" {
+		t.Fatalf("live image = %s, want v2", live.Container.Image)
+	}
+	if got := cluster.ReadyReplicas("default/iris-mlp"); got != 2 {
+		t.Fatalf("ready replicas = %d, want 2 (retry must not reset readiness)", got)
+	}
+}
+
 func TestApplyRetryBounded(t *testing.T) {
 	// The attempt budget is honoured exactly: with 3 attempts the
 	// reconciler makes 3 tries and no more, even when the failure
