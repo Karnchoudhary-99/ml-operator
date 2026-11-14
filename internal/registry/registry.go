@@ -228,7 +228,13 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if (a.Canary == nil) != (b.Canary == nil) {
 		return false
 	}
-	if a.Canary != nil && *a.Canary != *b.Canary {
+	if a.Canary != nil && !canaryEqual(*a.Canary, *b.Canary) {
+		return false
+	}
+	if (a.BlueGreen == nil) != (b.BlueGreen == nil) {
+		return false
+	}
+	if a.BlueGreen != nil && !gateEqual(a.BlueGreen.Gate, b.BlueGreen.Gate) {
 		return false
 	}
 	if (a.Autoscaling == nil) != (b.Autoscaling == nil) {
@@ -246,4 +252,29 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 		}
 	}
 	return true
+}
+
+// canaryEqual compares two canary specs by value. A plain struct
+// comparison would compare the Gate pointers, not the thresholds,
+// so a spec that survived a JSON round-trip (state file) would
+// never equal a freshly parsed manifest with the same gate —
+// `mlop diff -f` would bump the generation on every identical
+// re-apply instead of reporting in sync.
+func canaryEqual(a, b api.CanarySpec) bool {
+	if a.Weight != b.Weight || a.Steps != b.Steps || a.IntervalSeconds != b.IntervalSeconds {
+		return false
+	}
+	return gateEqual(a.Gate, b.Gate)
+}
+
+// gateEqual compares two gate specs by value: nil vs set differs,
+// equal thresholds are equal whatever the pointers are.
+func gateEqual(a, b *api.GateSpec) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return *a == *b
 }

@@ -219,3 +219,68 @@ func TestUpdateStatus(t *testing.T) {
 		t.Fatalf("revision moved on unknown-key UpdateStatus: %d", r.Revision())
 	}
 }
+
+// TestSpecsEqualGates compares specs with gate thresholds: two
+// separately-built specs with identical gates are equal (the old
+// struct comparison compared Gate pointers, so a spec that survived
+// a JSON round-trip never equalled a freshly parsed manifest and
+// `mlop diff -f` bumped the generation on every identical
+// re-apply). A different threshold, or a nil vs set gate, differs.
+func TestSpecsEqualGates(t *testing.T) {
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Strategy: api.StrategyCanary,
+			Canary: &api.CanarySpec{Weight: 10, Steps: 0, IntervalSeconds: 1,
+				Gate: &api.GateSpec{MaxErrorRate: 0.02, MaxP95LatencyMs: 250, MinReadyRatio: 1.0}},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical canary specs with separately-built gates should be equal")
+	}
+	b.Canary.Gate.MaxErrorRate = 0.05
+	if SpecsEqual(a, b) {
+		t.Fatal("different gate thresholds should not be equal")
+	}
+	b = base()
+	b.Canary.Gate = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil gate vs set gate should not be equal")
+	}
+	b = base()
+	b.Canary.Weight = 20
+	if SpecsEqual(a, b) {
+		t.Fatal("different canary weight should not be equal")
+	}
+
+	// Blue-green gates compare the same way — and a missing
+	// blueGreen block differs from a present one.
+	bg := func(gate *api.GateSpec) api.ModelDeploymentSpec {
+		s := api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Strategy: api.StrategyBlueGreen,
+			BlueGreen: &api.BlueGreenSpec{Gate: gate},
+		}
+		return s
+	}
+	x, y := bg(&api.GateSpec{MaxErrorRate: 0.02}), bg(&api.GateSpec{MaxErrorRate: 0.02})
+	if !SpecsEqual(x, y) {
+		t.Fatal("identical blue-green specs with separately-built gates should be equal")
+	}
+	y.BlueGreen.Gate.MaxErrorRate = 0.05
+	if SpecsEqual(x, y) {
+		t.Fatal("different blue-green gate thresholds should not be equal")
+	}
+	y = bg(nil)
+	if SpecsEqual(x, y) {
+		t.Fatal("nil blue-green gate vs set gate should not be equal")
+	}
+	z := bg(&api.GateSpec{MaxErrorRate: 0.02})
+	z.BlueGreen = nil
+	if SpecsEqual(x, z) {
+		t.Fatal("present blueGreen block vs absent block should not be equal")
+	}
+}
