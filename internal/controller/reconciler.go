@@ -398,14 +398,29 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 	plan := r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA)
 	actions := plan
 	for _, a := range plan {
-		if _, err := r.applyWithRetry(a, desired, canary, green, desiredSvc, desiredHPA); err != nil {
+		retries, err := r.applyWithRetry(a, desired, canary, green, desiredSvc, desiredHPA)
+		if err != nil {
+			// Every attempt failed: the retry budget is spent.
 			// A failed apply is Degraded, not Failed: the spec is
 			// fine, the cluster operation is what broke, and the
 			// caller should retry.
+			if r.Metrics != nil {
+				r.Metrics.Inc(metrics.MetricApplyRetriesTotal, 1, "outcome", "exhausted")
+			}
 			msg := fmt.Sprintf("apply %s %s failed: %v", a.Kind, a.Key, err)
 			r.recordEvent(key, metrics.EventWarning, "ApplyFailed", msg)
 			r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
+		}
+		if retries > 0 {
+			// The action landed, but only after retries: worth
+			// one event and one counter increment, so an operator
+			// can see a flaky cluster before it becomes an outage.
+			if r.Metrics != nil {
+				r.Metrics.Inc(metrics.MetricApplyRetriesTotal, 1, "outcome", "recovered")
+			}
+			r.recordEvent(key, metrics.EventNormal, "ApplyRetried",
+				fmt.Sprintf("apply %s %s succeeded after %d retries", a.Kind, a.Key, retries))
 		}
 	}
 

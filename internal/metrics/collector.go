@@ -75,6 +75,11 @@ const (
 	// MetricScaleEventsTotal counts autoscaling decisions by
 	// direction (label "direction": "up", "down", "held").
 	MetricScaleEventsTotal = "ml_operator_scale_events_total"
+	// MetricApplyRetriesTotal counts cluster operations that
+	// needed retries, by outcome (label "outcome": "recovered"
+	// — the retry succeeded — or "exhausted" — every attempt
+	// failed and the reconcile degraded).
+	MetricApplyRetriesTotal = "ml_operator_apply_retries_total"
 	// MetricReadyReplicas is the current ready replica count per
 	// deployment (label "deployment": "namespace/name").
 	MetricReadyReplicas = "ml_operator_ready_replicas"
@@ -108,6 +113,7 @@ func (c *Collector) Render() string {
 	write(MetricReconcilesTotal, "counter", c.counters[MetricReconcilesTotal])
 	write(MetricRolloutsTotal, "counter", c.counters[MetricRolloutsTotal])
 	write(MetricScaleEventsTotal, "counter", c.counters[MetricScaleEventsTotal])
+	write(MetricApplyRetriesTotal, "counter", c.counters[MetricApplyRetriesTotal])
 	write(MetricReadyReplicas, "gauge", c.gauges[MetricReadyReplicas])
 	write(MetricDesiredReplicas, "gauge", c.gauges[MetricDesiredReplicas])
 	return b.String()
