@@ -129,6 +129,40 @@ func New(reg *registry.Registry, cluster Cluster) *Reconciler {
 	}
 }
 
+// History returns the recorded audit trail for key, oldest first,
+// or nil when nothing has been recorded yet. The mlop CLI reads it
+// to show what happened to a deployment, and the store persists it.
+func (r *Reconciler) History(key string) []history.Entry {
+	if log := r.histories[key]; log != nil {
+		return log.Entries()
+	}
+	return nil
+}
+
+// Histories returns a copy of every deployment's audit trail,
+// keyed by "namespace/name".
+func (r *Reconciler) Histories() map[string][]history.Entry {
+	out := make(map[string][]history.Entry, len(r.histories))
+	for k, log := range r.histories {
+		out[k] = log.Entries()
+	}
+	return out
+}
+
+// RestoreHistory installs an audit trail loaded from the state
+// file. A trail for a deployment that no longer exists is dropped;
+// anything else is kept (capped by the log), since generations only
+// move forward and a stored entry can never describe a future the
+// registry has not seen.
+func (r *Reconciler) RestoreHistory(key string, entries []history.Entry) {
+	if r.Registry.Get(key) == nil {
+		return
+	}
+	log := history.New()
+	log.Restore(entries)
+	r.histories[key] = log
+}
+
 // RolloutState returns the rollout state the reconciler tracks for
 // key, or false when no canary rollout is (or was) in flight for it.
 // The mlop CLI reads it to report rollout progress and to persist
