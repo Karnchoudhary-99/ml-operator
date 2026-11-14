@@ -21,8 +21,9 @@ with the desired state.
 - [x] Health + readiness gates (model-load probe, traffic shift)
 - [x] Per-rollout health-gate thresholds (`canary.gate`)
 - [x] Rollback to previous version (`mlop rollback`)
+- [x] Diff preview + JSON output (`mlop diff`, `status`/`logs --json`)
 - [x] Metrics + events (Prometheus, Kubernetes events)
-- [x] CLI (`mlop`: apply, status, logs, rollout) + demo
+- [x] CLI (`mlop`: apply, diff, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -63,6 +64,30 @@ mlop apply -f examples/iris-mlp.yaml
 # Status: a table for all deployments, or a detail view for one.
 mlop status
 mlop status iris-mlp
+```
+
+Before applying a changed manifest, preview exactly what the
+reconciler would do — `mlop diff` computes the apply plan without
+changing any state (no cluster writes, no status writes, no state
+file write), so it is safe to run against a live deployment:
+
+```bash
+mlop diff iris-mlp
+# in sync: default/iris-mlp (generation 1) — live state matches desired state
+
+mlop diff -f examples/iris-mlp-canary.yaml
+# diff default/iris-mlp (generation 2):
+#   - UpdateDeployment default/iris-mlp (image "…/iris-mlp:v1" -> "…/iris-mlp:v2")
+#   - CreateDeployment default/iris-mlp-canary (canary deployment does not exist)
+```
+
+For scripts and dashboards, `status`, `logs` and `diff` all take
+`--json` and print the same data as JSON (an empty list is `[]`):
+
+```bash
+mlop status --json
+mlop logs iris-mlp --json --tail 5
+mlop diff -f examples/iris-mlp-canary.yaml --json
 ```
 
 Manifests are YAML (the shape in `examples/iris-mlp.yaml`) or JSON
@@ -140,7 +165,7 @@ examples/mlop-tour.sh
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`)
+- `cmd/mlop` — CLI client (`apply`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
 - `internal/store` — JSON state file shared between mlop invocations
