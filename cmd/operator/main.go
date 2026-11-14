@@ -5,9 +5,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
+	"github.com/Karnchoudhary-99/ml-operator/internal/registry"
+	"github.com/Karnchoudhary-99/ml-operator/internal/server"
 )
 
 var version = "0.1.0"
@@ -39,6 +46,26 @@ func main() {
 	}
 
 	fmt.Printf("ml-operator %s starting (namespace=%s metrics=%s)\n", version, namespace, metricsAddr)
-	fmt.Println("reconcile loop: not yet connected to a cluster (see roadmap)")
-	os.Exit(0)
+
+	// The reconcile loop is not yet connected to a real cluster (see
+	// roadmap), but the metrics endpoint is live from day one: the
+	// collector already records reconciles, rollouts and scale
+	// events, and the demo / future controller share it.
+	reg := registry.New()
+	cluster := controller.NewFakeCluster()
+	rec := controller.New(reg, cluster)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if metricsAddr != "" {
+		go func() {
+			if err := server.Serve(ctx, metricsAddr, rec.Metrics); err != nil {
+				fmt.Fprintf(os.Stderr, "metrics server: %v\n", err)
+				stop()
+			}
+		}()
+		fmt.Printf("metrics endpoint listening on %s (/metrics, /healthz)\n", metricsAddr)
+	}
+	<-ctx.Done()
+	fmt.Println("ml-operator shutting down")
 }
