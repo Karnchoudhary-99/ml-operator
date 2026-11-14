@@ -31,6 +31,11 @@ const (
 	// StrategyCanary shifts a percentage of traffic to the new revision
 	// and holds until the health gate passes.
 	StrategyCanary RolloutStrategy = "Canary"
+	// StrategyBlueGreen runs the new revision at full size beside
+	// the old one, then flips the Service to it once the health
+	// gate passes. Traffic never splits: clients see either the
+	// old version or the new one, never both at once.
+	StrategyBlueGreen RolloutStrategy = "BlueGreen"
 )
 
 // ModelDeployment is the custom resource the operator watches. It is
@@ -65,6 +70,10 @@ type ModelDeploymentSpec struct {
 	// Canary configures a canary rollout; required when Strategy is
 	// Canary, ignored otherwise.
 	Canary *CanarySpec
+	// BlueGreen configures a blue-green rollout; optional when
+	// Strategy is BlueGreen (a nil config takes the operator
+	// defaults), ignored otherwise.
+	BlueGreen *BlueGreenSpec
 	// Autoscaling enables the HorizontalPodAutoscaler for this model.
 	Autoscaling *AutoscalingSpec
 	// Env holds extra environment variables for the model container.
@@ -118,6 +127,16 @@ type CanarySpec struct {
 	// one a higher error budget — but a threshold never disables
 	// its check: a zero field takes the default, it does not turn
 	// the check off.
+	Gate *GateSpec
+}
+
+// BlueGreenSpec configures a blue-green rollout.
+type BlueGreenSpec struct {
+	// Gate overrides the health-gate thresholds for this rollout.
+	// Nil means the operator defaults (5% errors, 500ms p95, all
+	// green pods ready). Like a canary gate, a threshold never
+	// disables its check: a zero field takes the default, it does
+	// not turn the check off.
 	Gate *GateSpec
 }
 
