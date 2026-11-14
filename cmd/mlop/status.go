@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"strings"
@@ -9,17 +10,51 @@ import (
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
 )
 
-// cmdStatus implements `mlop status [name]`: reconcile first (the
+// statusListView is one row of `mlop status --json`.
+type statusListView struct {
+	Name      string    `json:"name"`
+	Namespace string    `json:"namespace"`
+	Phase     api.Phase `json:"phase"`
+	Ready     int32     `json:"ready"`
+	Desired   int32     `json:"desired"`
+	Version   string    `json:"version"`
+	Message   string    `json:"message"`
+}
+
+// statusDetailView is the JSON form of `mlop status <name> --json`.
+type statusDetailView struct {
+	Name               string               `json:"name"`
+	Namespace          string               `json:"namespace"`
+	Generation         int64                `json:"generation"`
+	ObservedGeneration int64                `json:"observedGeneration"`
+	Phase              api.Phase            `json:"phase"`
+	Ready              int32                `json:"ready"`
+	Desired            int32                `json:"desired"`
+	Image              string               `json:"image"`
+	Framework          string               `json:"framework"`
+	Version            string               `json:"version"`
+	PreviousImage      string               `json:"previousImage,omitempty"`
+	PreviousVersion    string               `json:"previousVersion,omitempty"`
+	Strategy           api.RolloutStrategy  `json:"strategy"`
+	Autoscaling        *api.AutoscalingSpec `json:"autoscaling,omitempty"`
+	Message            string               `json:"message"`
+	Conditions         []api.Condition      `json:"conditions,omitempty"`
+	Requeue            bool                 `json:"requeue"`
+}
+
+// cmdStatus implements `mlop status [name] [--json]`: reconcile first (the
 // operator is level-triggered, so this is a no-op when already in
 // sync), then show the deployment phases. With no name it lists
 // every deployment; with a name it shows the full detail view.
 // A bare name means the "default" namespace; "ns/name" is accepted.
+// --json prints the same data as JSON for scripts and dashboards.
 func cmdStatus(opts *options, args []string) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(opts.stderr)
 	fs.Usage = func() {
-		fmt.Fprint(opts.stderr, "Usage: mlop status [name]\n")
+		fmt.Fprint(opts.stderr, "Usage: mlop status [name] [--json]\n")
 	}
+	jsonOut := fs.Bool("json", false, "print status as JSON")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
@@ -38,6 +73,10 @@ func cmdStatus(opts *options, args []string) int {
 	if fs.NArg() == 0 {
 		entries := rt.Registry.List()
 		if len(entries) == 0 {
+			if *jsonOut {
+				fmt.Fprintln(opts.stdout, "[]")
+				return 0
+			}
 			fmt.Fprintln(opts.stdout, "no deployments")
 			return 0
 		}
@@ -50,6 +89,24 @@ func cmdStatus(opts *options, args []string) int {
 		if err := store.Save(opts.statePath, store.From(rt.Registry, rt.Cluster, rt.Reconciler)); err != nil {
 			fmt.Fprintf(opts.stderr, "mlop status: %v\n", err)
 			return 1
+		}
+		if *jsonOut {
+			rows := make([]statusListView, 0, len(entries))
+			for _, e := range rt.Registry.List() {
+				d := e.Deployment
+				rows = append(rows, statusListView{
+					Name: d.Name, Namespace: namespaceOf(d), Phase: d.Status.Phase,
+					Ready: d.Status.ReadyReplicas, Desired: desiredReplicas(d),
+					Version: d.Spec.Model.Version, Message: d.Status.Message,
+				})
+			}
+			enc := json.NewEncoder(opts.stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(rows); err != nil {
+				fmt.Fprintf(opts.stderr, "mlop status: %v\n", err)
+				return 1
+			}
+			return 0
 		}
 		fmt.Fprintln(opts.stdout, "NAME\tNAMESPACE\tPHASE\tREADY\tVERSION\tMESSAGE")
 		for _, e := range rt.Registry.List() {
@@ -78,6 +135,24 @@ func cmdStatus(opts *options, args []string) int {
 		return 1
 	}
 	d := rt.Registry.Get(key).Deployment
+	if *jsonOut {
+		view := statusDetailView{
+			Name: d.Name, Namespace: namespaceOf(d),
+			Generation: d.Generation, ObservedGeneration: d.Status.ObservedGeneration,
+			Phase: d.Status.Phase, Ready: d.Status.ReadyReplicas, Desired: desiredReplicas(d),
+			Image: d.Spec.Model.Image, Framework: d.Spec.Model.Framework, Version: d.Spec.Model.Version,
+			PreviousImage: d.Status.PreviousImage, PreviousVersion: d.Status.PreviousVersion,
+			Strategy: d.Spec.Strategy, Autoscaling: d.Spec.Autoscaling,
+			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
+		}
+		enc := json.NewEncoder(opts.stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(view); err != nil {
+			fmt.Fprintf(opts.stderr, "mlop status: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	fmt.Fprintf(opts.stdout, "name:       %s\n", d.Name)
 	fmt.Fprintf(opts.stdout, "namespace:  %s\n", namespaceOf(d))
 	fmt.Fprintf(opts.stdout, "generation: %d (observed %d)\n", d.Generation, d.Status.ObservedGeneration)
