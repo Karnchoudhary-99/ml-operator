@@ -398,29 +398,16 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 	plan := r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA)
 	actions := plan
 	for _, a := range plan {
-		retries, err := r.applyWithRetry(a, desired, canary, green, desiredSvc, desiredHPA)
-		if err != nil {
-			// Every attempt failed: the retry budget is spent.
+		if err := r.retryApply(key, string(a.Kind), a.Key, func() error {
+			return r.apply(a, desired, canary, green, desiredSvc, desiredHPA)
+		}); err != nil {
 			// A failed apply is Degraded, not Failed: the spec is
 			// fine, the cluster operation is what broke, and the
 			// caller should retry.
-			if r.Metrics != nil {
-				r.Metrics.Inc(metrics.MetricApplyRetriesTotal, 1, "outcome", "exhausted")
-			}
 			msg := fmt.Sprintf("apply %s %s failed: %v", a.Kind, a.Key, err)
 			r.recordEvent(key, metrics.EventWarning, "ApplyFailed", msg)
 			r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
-		}
-		if retries > 0 {
-			// The action landed, but only after retries: worth
-			// one event and one counter increment, so an operator
-			// can see a flaky cluster before it becomes an outage.
-			if r.Metrics != nil {
-				r.Metrics.Inc(metrics.MetricApplyRetriesTotal, 1, "outcome", "recovered")
-			}
-			r.recordEvent(key, metrics.EventNormal, "ApplyRetried",
-				fmt.Sprintf("apply %s %s succeeded after %d %s", a.Kind, a.Key, retries, plural(retries, "retry", "retries")))
 		}
 	}
 
@@ -657,7 +644,9 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 		// report Degraded. The stable Deployment keeps serving the
 		// previous version. Terminal for this generation.
 		actions = withoutNoOp(actions)
-		if err := r.Cluster.DeleteDeployment(canaryKey); err != nil {
+		if err := r.retryApply(key, "DeleteDeployment", canaryKey, func() error {
+			return r.Cluster.DeleteDeployment(canaryKey)
+		}); err != nil {
 			return Result{Actions: actions}, err
 		}
 		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey,
@@ -681,14 +670,18 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 		}
 		actions = withoutNoOp(actions)
 		promoted := render.DeploymentFor(d)
-		if err := r.Cluster.ApplyDeployment(promoted); err != nil {
+		if err := r.retryApply(key, "UpdateDeployment", key, func() error {
+			return r.Cluster.ApplyDeployment(promoted)
+		}); err != nil {
 			msg := fmt.Sprintf("promote: apply stable Deployment failed: %v", err)
 			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 		}
 		actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: key,
 			Reason: fmt.Sprintf("canary promoted: stable now serves %q", d.Spec.Model.Image)})
-		if err := r.Cluster.DeleteDeployment(canaryKey); err != nil {
+		if err := r.retryApply(key, "DeleteDeployment", canaryKey, func() error {
+			return r.Cluster.DeleteDeployment(canaryKey)
+		}); err != nil {
 			return Result{Actions: actions}, err
 		}
 		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: canaryKey, Reason: "canary promoted"})
@@ -712,7 +705,9 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 		// is live for the next reconcile's gate evaluation.
 		actions = withoutNoOp(actions)
 		c := render.CanaryDeploymentForWeight(d, next.CurrentWeight())
-		if err := r.Cluster.ApplyDeployment(c); err != nil {
+		if err := r.retryApply(key, "UpdateDeployment", canaryKey, func() error {
+			return r.Cluster.ApplyDeployment(c)
+		}); err != nil {
 			msg := fmt.Sprintf("canary weight step failed: %v", err)
 			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
@@ -794,7 +789,9 @@ func (r *Reconciler) reconcileBlueGreen(key string, d api.ModelDeployment, bg ro
 		// keeps serving the previous version. Terminal for this
 		// generation.
 		actions = withoutNoOp(actions)
-		if err := r.Cluster.DeleteDeployment(greenKey); err != nil {
+		if err := r.retryApply(key, "DeleteDeployment", greenKey, func() error {
+			return r.Cluster.DeleteDeployment(greenKey)
+		}); err != nil {
 			return Result{Actions: actions}, err
 		}
 		actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: greenKey,
@@ -813,7 +810,9 @@ func (r *Reconciler) reconcileBlueGreen(key string, d api.ModelDeployment, bg ro
 		// reconcile — the switch is the commit point, and the
 		// fold that follows only makes green the new stable.
 		actions = withoutNoOp(actions)
-		if err := r.Cluster.ApplyService(render.GreenServiceFor(d)); err != nil {
+		if err := r.retryApply(key, "UpdateService", key, func() error {
+			return r.Cluster.ApplyService(render.GreenServiceFor(d))
+		}); err != nil {
 			msg := fmt.Sprintf("blue-green switch failed: %v", err)
 			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
@@ -855,20 +854,26 @@ func (r *Reconciler) foldBlueGreen(key string, d api.ModelDeployment, bg rollout
 	}
 	actions = withoutNoOp(actions)
 	promoted := render.DeploymentFor(d)
-	if err := r.Cluster.ApplyDeployment(promoted); err != nil {
+	if err := r.retryApply(key, "UpdateDeployment", key, func() error {
+		return r.Cluster.ApplyDeployment(promoted)
+	}); err != nil {
 		msg := fmt.Sprintf("blue-green fold: apply stable Deployment failed: %v", err)
 		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 	}
 	actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: key,
 		Reason: fmt.Sprintf("blue-green folded: stable now serves %q", d.Spec.Model.Image)})
-	if err := r.Cluster.ApplyService(render.ServiceFor(d)); err != nil {
+	if err := r.retryApply(key, "UpdateService", key, func() error {
+		return r.Cluster.ApplyService(render.ServiceFor(d))
+	}); err != nil {
 		msg := fmt.Sprintf("blue-green fold: apply service failed: %v", err)
 		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 	}
 	actions = append(actions, Action{Kind: ActionUpdateService, Key: key, Reason: "blue-green folded: service back to stable"})
-	if err := r.Cluster.DeleteDeployment(greenKey); err != nil {
+	if err := r.retryApply(key, "DeleteDeployment", greenKey, func() error {
+		return r.Cluster.DeleteDeployment(greenKey)
+	}); err != nil {
 		return Result{Actions: actions}, err
 	}
 	actions = append(actions, Action{Kind: ActionDeleteDeployment, Key: greenKey, Reason: "blue-green folded"})
@@ -1015,15 +1020,34 @@ func (r *Reconciler) retryClusterCall(fn func() error) (int, error) {
 	return r.maxApplyAttempts() - 1, err
 }
 
-// applyWithRetry executes one plan action against the cluster,
-// retrying transient failures with exponential backoff. It
-// returns how many retries were needed and the final error (nil
-// when the action applied). A NoOp never touches the cluster, so
-// it never retries.
-func (r *Reconciler) applyWithRetry(a Action, desired render.Deployment, canary *render.Deployment, green *render.Deployment, svc render.Service, hpa render.HPA) (int, error) {
-	return r.retryClusterCall(func() error {
-		return r.apply(a, desired, canary, green, svc, hpa)
-	})
+// retryApply runs one cluster operation with the retry policy
+// (retryClusterCall) and records the outcome: a recovered
+// operation emits one ApplyRetried event and one "recovered"
+// counter increment, so an operator can see a flaky cluster
+// before it becomes an outage; an exhausted one increments the
+// "exhausted" counter and returns the error for the caller to
+// report (the caller owns the Degraded status and the ApplyFailed
+// event). kind names the operation for the event message
+// ("CreateDeployment", "UpdateService", …) and target is the
+// object key it acted on. The plan loop and the rollout paths
+// (promote, fold, switch, abort) all go through here, so no
+// cluster write skips the retry policy.
+func (r *Reconciler) retryApply(key, kind, target string, fn func() error) error {
+	retries, err := r.retryClusterCall(fn)
+	if err != nil {
+		if r.Metrics != nil {
+			r.Metrics.Inc(metrics.MetricApplyRetriesTotal, 1, "outcome", "exhausted")
+		}
+		return err
+	}
+	if retries > 0 {
+		if r.Metrics != nil {
+			r.Metrics.Inc(metrics.MetricApplyRetriesTotal, 1, "outcome", "recovered")
+		}
+		r.recordEvent(key, metrics.EventNormal, "ApplyRetried",
+			fmt.Sprintf("apply %s %s succeeded after %d %s", kind, target, retries, plural(retries, "retry", "retries")))
+	}
+	return nil
 }
 
 // apply executes one plan action against the cluster, resolving the
