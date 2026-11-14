@@ -2,6 +2,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/registry"
@@ -308,5 +309,101 @@ func TestReconcileServiceUpdate(t *testing.T) {
 	}
 	if got, _ := cluster.GetService("default/iris-mlp"); got.TargetPort != 9000 {
 		t.Fatalf("live service targetPort = %d, want 9000", got.TargetPort)
+	}
+}
+
+// TestConditionsKeepTransitionTimeAcrossReconciles pins the point of
+// the transition-time work: a no-op reconcile must not re-stamp the
+// conditions. The Ready condition is stamped when the deployment
+// first becomes Progressing, keeps that stamp through a steady
+// reconcile, moves only when the phase flips to Available, and then
+// stays put through another steady reconcile. The clock is the
+// reconciler's controllable Now, so the times are exact.
+func TestConditionsKeepTransitionTimeAcrossReconciles(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	t0 := time.Date(2026, 11, 14, 21, 0, 0, 0, time.UTC)
+	now := t0
+	rec.Now = func() time.Time { return now }
+
+	reg.Register(dep("iris-mlp", 1))
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	ready := reg.Get("default/iris-mlp").Deployment.Status.ConditionFor("Ready")
+	if ready == nil || ready.Status != "False" || ready.Reason != "Provisioning" {
+		t.Fatalf("after create: Ready = %+v, want False/Provisioning", ready)
+	}
+	if !ready.LastTransitionTime.Equal(t0) {
+		t.Fatalf("after create: Ready stamped %v, want %v", ready.LastTransitionTime, t0)
+	}
+
+	// Steady reconcile at a later clock: same phase, stamp must not move.
+	now = t0.Add(10 * time.Minute)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Get("default/iris-mlp").Deployment.Status.ConditionFor("Ready"); !got.LastTransitionTime.Equal(t0) {
+		t.Fatalf("no-op reconcile moved the stamp: %v, want %v", got.LastTransitionTime, t0)
+	}
+
+	// Pods come up: the flip to Available re-stamps.
+	t2 := t0.Add(20 * time.Minute)
+	now = t2
+	cluster.SetReady("default/iris-mlp", 2)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	ready = reg.Get("default/iris-mlp").Deployment.Status.ConditionFor("Ready")
+	if ready == nil || ready.Status != "True" || ready.Reason != "ReplicasAvailable" {
+		t.Fatalf("after ready: Ready = %+v, want True/ReplicasAvailable", ready)
+	}
+	if !ready.LastTransitionTime.Equal(t2) {
+		t.Fatalf("after ready: Ready stamped %v, want %v", ready.LastTransitionTime, t2)
+	}
+
+	// Another steady reconcile: the new stamp holds.
+	now = t2.Add(10 * time.Minute)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Get("default/iris-mlp").Deployment.Status.ConditionFor("Ready"); !got.LastTransitionTime.Equal(t2) {
+		t.Fatalf("steady Available reconcile moved the stamp: %v, want %v", got.LastTransitionTime, t2)
+	}
+}
+
+// TestConditionsCarryRealReasons checks the two failure paths that
+// used to report the bare phase name as the condition reason: an
+// invalid spec fails with InvalidSpec, and an exhausted apply retry
+// degrades with ApplyFailed.
+func TestConditionsCarryRealReasons(t *testing.T) {
+	reg, _, rec := setup(t)
+	bad := dep("iris-mlp", 1)
+	bad.Spec.Model.Image = ""
+	reg.Register(bad)
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.Phase != api.PhaseFailed {
+		t.Fatalf("invalid spec: phase=%s, want Failed", res.Phase)
+	}
+	st := reg.Get("default/iris-mlp").Deployment.Status
+	for _, typ := range []string{"Ready", "Progressing", "Available"} {
+		if c := st.ConditionFor(typ); c == nil || c.Reason != "InvalidSpec" {
+			t.Fatalf("invalid spec: %s condition = %+v, want reason InvalidSpec", typ, c)
+		}
+	}
+
+	reg2, cluster2, rec2 := setup(t)
+	rec2.ApplyRetryBackoff = 0
+	reg2.Register(dep("iris-mlp", 1))
+	cluster2.FailNextApplies(100)
+	res, err = rec2.Reconcile("default/iris-mlp")
+	if err == nil || res.Phase != api.PhaseDegraded {
+		t.Fatalf("apply failure: err=%v phase=%s, want error + Degraded", err, res.Phase)
+	}
+	st2 := reg2.Get("default/iris-mlp").Deployment.Status
+	if c := st2.ConditionFor("Ready"); c == nil || c.Reason != "ApplyFailed" {
+		t.Fatalf("apply failure: Ready condition = %+v, want reason ApplyFailed", c)
 	}
 }

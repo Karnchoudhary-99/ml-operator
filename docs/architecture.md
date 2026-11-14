@@ -94,6 +94,14 @@ cluster every time, and applies only the difference:
    condition can never linger. An aborted rollout stays `Degraded`
    for its generation — readiness alone must not flip it back to
    `Available` while the stable Deployment serves the old version.
+   Each condition carries a real reason (`InvalidSpec`,
+   `ApplyFailed`, `RolloutAborted`, `ReplicasAvailable`, ...) and a
+   `lastTransitionTime` stamped when its status last flipped, using
+   the reconciler's clock: a no-op reconcile keeps the old stamp,
+   so `mlop status` can say how long a deployment has been Degraded
+   instead of just that it is. Conditions loaded from a state file
+   written before transition times existed are stamped on first
+   sight.
 
 `Reconciler.Plan` runs steps 1–4 only and returns the plan without
 changing anything — no cluster writes, no status writes, no metrics,
