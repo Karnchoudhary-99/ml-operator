@@ -9,6 +9,7 @@ import (
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
+	"github.com/Karnchoudhary-99/ml-operator/internal/history"
 	"github.com/Karnchoudhary-99/ml-operator/internal/metrics"
 	"github.com/Karnchoudhary-99/ml-operator/internal/registry"
 	"github.com/Karnchoudhary-99/ml-operator/internal/rollout"
@@ -35,6 +36,11 @@ type State struct {
 	// Events is the recorded operator event history, newest last
 	// (the recorder reverses it for display).
 	Events []metrics.Event `json:"events"`
+	// History is the per-deployment audit trail (generation /
+	// phase / image transitions), oldest first per deployment.
+	// Old state files (written before history existed) load with
+	// this nil, which is the same as "no history recorded yet".
+	History map[string][]history.Entry `json:"history"`
 }
 
 // Runtime is the live in-memory world rebuilt from a State: the
@@ -129,6 +135,7 @@ func From(reg *registry.Registry, cluster *controller.FakeCluster, rec *controll
 	s.Cluster = cluster.Snapshot()
 	s.Rollouts = rec.RolloutStates()
 	s.BlueGreenRollouts = rec.BlueGreenStates()
+	s.History = rec.Histories()
 	s.Events = rec.Events.List()
 	// Events.List returns newest first; store oldest first so the
 	// file reads chronologically.
@@ -156,6 +163,9 @@ func (s *State) Restore() *Runtime {
 	}
 	for key, bs := range s.BlueGreenRollouts {
 		rec.RestoreBlueGreenState(key, bs)
+	}
+	for key, entries := range s.History {
+		rec.RestoreHistory(key, entries)
 	}
 	rec.Events.Restore(s.Events)
 	return &Runtime{Registry: reg, Cluster: cluster, Reconciler: rec}
