@@ -1,10 +1,18 @@
 package controller
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/render"
 )
+
+// errTransientApplyFailure is the error a failing FakeCluster
+// apply returns. It stands in for the transient cluster errors a
+// real API server returns under load (timeouts, etcd hiccups,
+// admission webhook blips) — the kind the reconciler must ride
+// out with a retry instead of degrading the deployment.
+var errTransientApplyFailure = errors.New("fake cluster: transient apply failure")
 
 // FakeCluster is an in-memory Cluster for tests and the operator demo
 // loop. It stores exactly what was applied — no rollout simulation —
@@ -17,6 +25,13 @@ type FakeCluster struct {
 	hpas        map[string]render.HPA
 	metrics     map[string]ClusterMetrics
 	ready       map[string]int32
+	// failApplies is the test-only chaos hook: while it is > 0,
+	// every mutating call (apply or delete, any object) fails
+	// with errTransientApplyFailure and decrements it. Tests use
+	// it to prove the reconciler retries transient failures
+	// instead of degrading on the first one. Production code
+	// never sets it.
+	failApplies int
 }
 
 // NewFakeCluster returns an empty fake cluster.
@@ -38,6 +53,27 @@ func (f *FakeCluster) GetDeployment(key string) (render.Deployment, bool) {
 	return d, ok
 }
 
+// FailNextApplies arms the chaos hook: the next n mutating calls
+// (ApplyDeployment, ApplyService, ApplyHPA, and the deletes) fail
+// with a transient error, then the cluster behaves normally again.
+// It is test-only — the demo and the CLI never call it.
+func (f *FakeCluster) FailNextApplies(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failApplies = n
+}
+
+// consumeFailure reports whether the next mutating call should
+// fail: true while the chaos hook still has failures left, and it
+// spends one. Callers hold the lock.
+func (f *FakeCluster) consumeFailure() bool {
+	if f.failApplies <= 0 {
+		return false
+	}
+	f.failApplies--
+	return true
+}
+
 // ApplyDeployment implements Cluster. A newly applied Deployment
 // starts with 0 ready replicas — pods take time to come up — until
 // the test (or demo) calls SetReady. Re-applying an existing
@@ -47,6 +83,9 @@ func (f *FakeCluster) GetDeployment(key string) (render.Deployment, bool) {
 func (f *FakeCluster) ApplyDeployment(d render.Deployment) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
 	key := d.Namespace + "/" + d.Name
 	if _, ok := f.deployments[key]; !ok {
 		f.ready[key] = 0
@@ -59,6 +98,9 @@ func (f *FakeCluster) ApplyDeployment(d render.Deployment) error {
 func (f *FakeCluster) DeleteDeployment(key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
 	delete(f.deployments, key)
 	delete(f.ready, key)
 	delete(f.metrics, key)
@@ -77,6 +119,9 @@ func (f *FakeCluster) GetService(key string) (render.Service, bool) {
 func (f *FakeCluster) ApplyService(s render.Service) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
 	f.services[s.Namespace+"/"+s.Name] = s
 	return nil
 }
@@ -85,6 +130,9 @@ func (f *FakeCluster) ApplyService(s render.Service) error {
 func (f *FakeCluster) DeleteService(key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
 	delete(f.services, key)
 	return nil
 }
@@ -101,6 +149,9 @@ func (f *FakeCluster) GetHPA(key string) (render.HPA, bool) {
 func (f *FakeCluster) ApplyHPA(h render.HPA) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
 	f.hpas[h.Namespace+"/"+h.Name] = h
 	return nil
 }
@@ -109,6 +160,9 @@ func (f *FakeCluster) ApplyHPA(h render.HPA) error {
 func (f *FakeCluster) DeleteHPA(key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
 	delete(f.hpas, key)
 	return nil
 }
