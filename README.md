@@ -83,6 +83,24 @@ mlop ready iris-mlp --replicas 2
 # default/iris-mlp: 2 pod(s) ready — phase=Available (2/2 ready)
 ```
 
+Ready pods are not enough for a canary: the model itself has to
+load into the serving container (Triton's
+`/v2/models/<name>/ready`). `mlop load` simulates that probe —
+loaded by default, `--loading` while the model warms up,
+`--fail` when it fails to load — and `--canary` targets the
+canary Deployment:
+
+```bash
+mlop load iris-mlp --canary --loading   # gate holds, no failure counted
+mlop load iris-mlp --canary             # model loaded: the gate judges traffic signals
+mlop load iris-mlp --canary --fail      # failed load: a real gate failure
+```
+
+A loading model holds the rollout at its weight without burning
+failure budget; a failed load fails the gate, and three
+consecutive failures abort the rollout. `examples/model-load-tour.sh`
+drives both stories end to end (hold-then-promote, fail-then-abort).
+
 `mlop logs` shows the recorded events for a deployment (newest
 first; only notable transitions are recorded — promotions, scale
 decisions, aborts, invalid specs — not routine reconciles), and
@@ -122,7 +140,7 @@ examples/mlop-tour.sh
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `status`, `logs`, `rollout`, `ready`)
+- `cmd/mlop` — CLI client (`apply`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
 - `internal/store` — JSON state file shared between mlop invocations
@@ -222,7 +240,11 @@ adopts the other's pods.
   not burn its failure budget while its pods come up. The
   model-load probe is pending the same way: when the cluster
   reports the model has not finished loading yet, the gate holds
-  until it has, whatever pod readiness says.
+  until it has, whatever pod readiness says. When the probe
+  reports the model *failed* to load (bad artifact, OOM, missing
+  weights), that is a real failure, not a hold — it burns failure
+  budget, so a broken model aborts the rollout instead of waiting
+  forever for a load that will never finish.
 - The state machine holds, advances (once the step interval has
   elapsed), promotes at the final weight, or aborts after 3
   consecutive gate failures (configurable). A pass clears the
@@ -236,7 +258,9 @@ advance re-renders the canary at the next weight immediately,
 promote folds the new image into the stable Deployment and deletes
 the canary, abort deletes the canary and reports `Degraded` with no
 requeue (terminal for that generation; the stable Deployment keeps
-serving the previous version). Rollout state is per-deployment and
+serving the previous version, and later reconciles keep the
+deployment `Degraded` for that generation instead of flipping it
+back to `Available` on readiness alone). Rollout state is per-deployment and
 resets on a new generation or canary-spec change; a done state is
 kept so the same generation never restarts. `operator --demo` runs
 a full canary rollout (10% → 55% → 100% → promote) against the
