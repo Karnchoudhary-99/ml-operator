@@ -48,11 +48,11 @@ way Kubernetes aggregates events.
 
 ## Metrics to watch
 
-The demo prints the reconciler's Prometheus exposition at the end
-(`go run ./cmd/operator --demo`); serving it on `--metrics-addr`
-(default `:8080`) lands with the controller-runtime phase — the
-flag is parsed today, the endpoint is not yet wired. The metric
-names below are already the ones the reconciler records:
+The operator serves its Prometheus exposition on `--metrics-addr`
+(default `:8080`): `curl localhost:8080/metrics` (and
+`curl localhost:8080/healthz` for the liveness probe). The demo
+prints the same exposition at the end (`go run ./cmd/operator
+--demo`). The metric names below are the ones the reconciler records:
 
 - `ml_operator_reconciles_total{result=available|progressing|degraded|failed}`
   — one increment per reconcile outcome. A rising `degraded`
