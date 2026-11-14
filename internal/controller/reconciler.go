@@ -420,7 +420,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 				r.Metrics.Inc(metrics.MetricApplyRetriesTotal, 1, "outcome", "recovered")
 			}
 			r.recordEvent(key, metrics.EventNormal, "ApplyRetried",
-				fmt.Sprintf("apply %s %s succeeded after %d retries", a.Kind, a.Key, retries))
+				fmt.Sprintf("apply %s %s succeeded after %d %s", a.Kind, a.Key, retries, plural(retries, "retry", "retries")))
 		}
 	}
 
@@ -1274,6 +1274,15 @@ func boolStatus(v bool) string {
 
 func quotePair(old, new string) string {
 	return fmt.Sprintf("%q -> %q", old, new)
+}
+
+// plural picks the singular or plural word for a count, for
+// human-readable event messages ("1 retry", "2 retries").
+func plural(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
 }
 
 func errorStrings(errs []error) []string {
