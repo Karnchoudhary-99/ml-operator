@@ -23,6 +23,7 @@ with the desired state.
 - [x] Rollback to previous version (`mlop rollback`)
 - [x] Diff preview + JSON output (`mlop diff`, `status`/`logs --json`)
 - [x] Metrics + events (Prometheus, Kubernetes events)
+- [x] Metrics HTTP endpoint (`--metrics-addr`, `/metrics` + `/healthz`)
 - [x] CLI (`mlop`: apply, diff, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
 
@@ -348,8 +349,11 @@ aborts (`ml_operator_rollouts_total{result}`), scaling decisions
 and desired replica gauges per deployment, and events
 (`ScaledUp`, `ScaledDown`, `ScaleDownHeld`, `CanaryPromoted`,
 `RolloutAborted`, `InvalidSpec`, `ApplyFailed`). The demo prints
-both at the end. The scrape endpoint and the real Kubernetes event
-sink land with the controller-runtime phase.
+both at the end, and the operator serves the exposition live on
+`--metrics-addr` (default `:8080`, `/metrics` plus a `/healthz`
+liveness probe) — an empty exposition until the first reconcile
+records a series is normal. The real Kubernetes event sink lands
+with the controller-runtime phase.
 
 ## License
 
