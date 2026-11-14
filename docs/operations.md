@@ -99,6 +99,11 @@ prints the same exposition at the end (`go run ./cmd/operator
 - `ml_operator_scale_events_total{direction=up|down|held}` —
   autoscaling activity. Frequent `held` entries are normal: the
   5-minute scale-down stabilization window is doing its job.
+- `ml_operator_apply_retries_total{outcome=recovered|exhausted}`
+  — cluster operations that needed retries. A rising `recovered`
+  share means the cluster is flaky (worth a look before it becomes
+  an outage); `exhausted` means reconciles are degrading — check
+  `mlop logs` for `ApplyFailed` and the cluster itself.
 - `ml_operator_ready_replicas` / `ml_operator_desired_replicas`
   — the gap between them is the deployment's health at a glance.
 
@@ -137,6 +142,16 @@ the step interval has not elapsed yet. Both clear on their own.
 is registered — fix the reported errors (bad name, limit below
 request, missing canary config, …) and re-apply. A rejected apply
 changes nothing.
+
+**`apply` fails and the deployment goes `Degraded` with
+`ApplyFailed`.** The reconciler already retried the operation 3
+times with backoff — this is not a first-blip failure, it is a
+cluster that stayed broken (or a permission the operator lacks).
+Fix the cluster side, then re-apply or wait for the requeue: the
+spec is unchanged and valid, so the next reconcile retries the
+same plan. `mlop logs` shows `ApplyRetried` entries for the
+operations that recovered on their own — a rising count means a
+flaky cluster, worth investigating before it becomes an outage.
 
 **`status` shows a phase you do not expect after an edit.** `mlop
 status` reconciles first, so it reports the post-reconcile state.
