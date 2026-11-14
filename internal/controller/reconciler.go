@@ -1119,7 +1119,9 @@ func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
 		if !target.get(target.key) {
 			continue
 		}
-		if err := target.del(target.key); err != nil {
+		if err := r.retryApply(key, string(target.kind), target.key, func() error {
+			return target.del(target.key)
+		}); err != nil {
 			return Result{Actions: actions}, err
 		}
 		actions = append(actions, Action{Kind: target.kind, Key: target.key, Reason: "deployment removed from registry"})

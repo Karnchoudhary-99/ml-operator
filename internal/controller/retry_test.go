@@ -129,6 +129,58 @@ func TestApplyRetryIdempotent(t *testing.T) {
 	}
 }
 
+func TestApplyRetryDeletedCleanup(t *testing.T) {
+	// Garbage collection uses the same retry policy: a flaky
+	// cluster must not leave a deleted deployment's objects
+	// behind, and a permanently failing one must report the
+	// cleanup as failed instead of pretending it worked.
+	reg, cluster, rec := setup(t)
+	rec.ApplyRetryBackoff = 0
+	reg.Register(dep("iris-mlp", 1))
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	reg.Delete("default/iris-mlp")
+
+	cluster.FailNextApplies(2)
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("cleanup reconcile: %v", err)
+	}
+	if cluster.DeploymentCount() != 0 || cluster.ServiceCount() != 0 {
+		t.Fatalf("after cleanup: %d deployments / %d services, want 0/0",
+			cluster.DeploymentCount(), cluster.ServiceCount())
+	}
+	if got := rec.Metrics.Counter(metrics.MetricApplyRetriesTotal, "outcome", "recovered"); got != 1 {
+		t.Fatalf("recovered retries = %v, want 1", got)
+	}
+	if len(res.Actions) != 2 { // DeleteDeployment + DeleteService
+		t.Fatalf("cleanup actions = %v, want 2 deletes", res.Actions)
+	}
+
+	// Exhaustion: the cleanup fails and says so.
+	reg.Register(dep("iris-mlp", 1))
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	reg.Delete("default/iris-mlp")
+	cluster.FailNextApplies(3)
+	if _, err := rec.Reconcile("default/iris-mlp"); err == nil {
+		t.Fatal("cleanup reconcile succeeded despite 3 failing deletes")
+	}
+	if cluster.DeploymentCount() != 1 {
+		t.Fatalf("failed cleanup removed the Deployment anyway: %d left, want 1", cluster.DeploymentCount())
+	}
+	// The cluster recovers: the next reconcile finishes the cleanup.
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("cleanup after recovery: %v", err)
+	}
+	if cluster.DeploymentCount() != 0 || cluster.ServiceCount() != 0 {
+		t.Fatalf("after recovery: %d deployments / %d services, want 0/0",
+			cluster.DeploymentCount(), cluster.ServiceCount())
+	}
+}
+
 func TestApplyRetryBounded(t *testing.T) {
 	// The attempt budget is honoured exactly: with 3 attempts the
 	// reconciler makes 3 tries and no more, even when the failure
