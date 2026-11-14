@@ -14,8 +14,8 @@ import (
 // fake cluster: register -> reconcile (create) -> pods ready ->
 // reconcile (available) -> new image -> reconcile (rolling update)
 // -> canary rollout to a third version (weight steps, health gate,
-// promotion). It prints every action and phase, so the reconcile
-// loop is visible without a real cluster.
+// model-load probe, promotion). It prints every action and phase,
+// so the reconcile loop is visible without a real cluster.
 func runDemo(w io.Writer) error {
 	reg := registry.New()
 	cluster := controller.NewFakeCluster()
@@ -75,7 +75,11 @@ func runDemo(w io.Writer) error {
 	// while the canary steps 10% -> 55% -> 100% behind the health
 	// gate, then promotes and the canary is deleted. The demo drives
 	// the reconciler's clock 31s per step so each step waits out
-	// the 30s canary interval.
+	// the 30s canary interval. The model-load probe is part of the
+	// story: the canary's pods are ready but its model is still
+	// loading, so the first gate holds at 10% without burning
+	// failure budget; only once the model loads does the rollout
+	// advance.
 	now := time.Now()
 	rec.Now = func() time.Time { return now }
 	d.Generation = 3
@@ -92,19 +96,29 @@ func runDemo(w io.Writer) error {
 	printResult(w, "reconcile 5 (canary v3 created)", res)
 
 	cluster.SetReady("default/iris-mlp-canary", 1)
+	cluster.SetModelLoading("default/iris-mlp-canary")
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		return err
+	}
+	printResult(w, "reconcile 6 (canary model still loading — hold at 10%)", res)
+
+	// The model finishes loading; the gate passes and the rollout
+	// advances on the next interval.
+	cluster.SetModelLoaded("default/iris-mlp-canary")
 	now = now.Add(31 * time.Second)
 	res, err = rec.Reconcile("default/iris-mlp")
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 6 (canary 55%)", res)
+	printResult(w, "reconcile 7 (canary 55%)", res)
 
 	now = now.Add(31 * time.Second)
 	res, err = rec.Reconcile("default/iris-mlp")
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 7 (canary 100%)", res)
+	printResult(w, "reconcile 8 (canary 100%)", res)
 
 	cluster.SetReady("default/iris-mlp-canary", 2)
 	now = now.Add(31 * time.Second)
@@ -112,13 +126,13 @@ func runDemo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 8 (canary promoted)", res)
+	printResult(w, "reconcile 9 (canary promoted)", res)
 
 	res, err = rec.Reconcile("default/iris-mlp")
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 9 (in sync)", res)
+	printResult(w, "reconcile 10 (in sync)", res)
 
 	// Autoscaling: the canary chapter is over, so the deployment
 	// goes back to RollingUpdate and gains an HPA (min 1, max 5,
@@ -134,7 +148,7 @@ func runDemo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 10 (autoscaling on — HPA created)", res)
+	printResult(w, "reconcile 11 (autoscaling on — HPA created)", res)
 
 	// A load spike (140% CPU vs 70% target) doubles the replicas.
 	cluster.SetMetrics("default/iris-mlp", controller.ClusterMetrics{CPUUtilizationPercent: 140, RequestsPerSecond: -1, ErrorRate: -1})
@@ -142,7 +156,7 @@ func runDemo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 11 (load spike — scale up)", res)
+	printResult(w, "reconcile 12 (load spike — scale up)", res)
 
 	// The spike is over (no metrics sample): the new pods come up
 	// and the deployment is Available at 4 replicas.
@@ -152,7 +166,7 @@ func runDemo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 12 (4 replicas ready)", res)
+	printResult(w, "reconcile 13 (4 replicas ready)", res)
 
 	// The load dips (10% CPU): the first scale-down applies at
 	// once, back to 1 replica.
@@ -161,14 +175,14 @@ func runDemo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 13 (load dip — scale down)", res)
+	printResult(w, "reconcile 14 (load dip — scale down)", res)
 
 	cluster.SetReady("default/iris-mlp", 1)
 	res, err = rec.Reconcile("default/iris-mlp")
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 14 (1 replica ready)", res)
+	printResult(w, "reconcile 15 (1 replica ready)", res)
 
 	// Observability: the metrics the reconciler recorded, in
 	// Prometheus exposition format, and the events it raised.
@@ -183,7 +197,7 @@ func runDemo(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printResult(w, "reconcile 15 (in sync)", res)
+	printResult(w, "reconcile 16 (in sync)", res)
 	return nil
 }
 
