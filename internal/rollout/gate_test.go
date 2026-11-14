@@ -37,7 +37,7 @@ func TestEvaluate(t *testing.T) {
 		{
 			"zero desired is pending",
 			Gate{}, Sample{ReadyReplicas: 0, DesiredReplicas: 0},
-			false, true, "no desired canary replicas",
+			false, true, "no desired rollout replicas",
 		},
 		{
 			"error rate above the threshold fails",
