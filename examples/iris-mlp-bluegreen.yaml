@@ -1,0 +1,19 @@
+# Blue-green rollout manifest for the mlop tour: v2 of iris-mlp ships
+# as a full-size green Deployment beside the stable v1 one. Traffic
+# never splits: the Service flips to green only once the gate passes.
+# The gate is tighter than the operator defaults (2% errors instead
+# of 5%), because iris-mlp is latency-sensitive in this example.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v2
+    framework: onnx
+    version: v2
+  replicas: 2
+  strategy: BlueGreen
+  blueGreen:
+    gate:
+      maxErrorRate: 0.02
+      maxP95LatencyMs: 250
+      minReadyRatio: 1.0

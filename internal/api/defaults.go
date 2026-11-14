@@ -67,23 +67,17 @@ func ApplyDefaults(d *ModelDeployment) {
 		// only the zero fields, so a rollout that sets just an
 		// error budget still gets the default latency cap and
 		// ready ratio instead of silently disabling those checks.
-		if spec.Canary.Gate == nil {
-			spec.Canary.Gate = &GateSpec{
-				MaxErrorRate:    DefaultGateMaxErrorRate,
-				MaxP95LatencyMs: DefaultGateMaxP95LatencyMs,
-				MinReadyRatio:   DefaultGateMinReadyRatio,
-			}
-		} else {
-			if spec.Canary.Gate.MaxErrorRate == 0 {
-				spec.Canary.Gate.MaxErrorRate = DefaultGateMaxErrorRate
-			}
-			if spec.Canary.Gate.MaxP95LatencyMs == 0 {
-				spec.Canary.Gate.MaxP95LatencyMs = DefaultGateMaxP95LatencyMs
-			}
-			if spec.Canary.Gate.MinReadyRatio == 0 {
-				spec.Canary.Gate.MinReadyRatio = DefaultGateMinReadyRatio
-			}
+		spec.Canary.Gate = defaultGate(spec.Canary.Gate)
+	}
+	if spec.Strategy == StrategyBlueGreen {
+		// Same gate-defaulting as a canary: a missing blue-green
+		// spec (or a missing/partial gate inside it) takes the
+		// operator defaults, so a BlueGreen strategy with no
+		// blueGreen block at all still has a real health gate.
+		if spec.BlueGreen == nil {
+			spec.BlueGreen = &BlueGreenSpec{}
 		}
+		spec.BlueGreen.Gate = defaultGate(spec.BlueGreen.Gate)
 	}
 	if spec.Autoscaling != nil && spec.Autoscaling.MinReplicas == 0 {
 		spec.Autoscaling.MinReplicas = DefaultAutoscalingMin
@@ -103,4 +97,27 @@ func ApplyDefaults(d *ModelDeployment) {
 	if spec.Health.PeriodSeconds == 0 {
 		spec.Health.PeriodSeconds = DefaultHealthPeriod
 	}
+}
+
+// defaultGate returns g with every zero threshold filled from the
+// operator defaults, or a fresh default gate when g is nil. A
+// zero field means "use the default", never "disable the check".
+func defaultGate(g *GateSpec) *GateSpec {
+	if g == nil {
+		return &GateSpec{
+			MaxErrorRate:    DefaultGateMaxErrorRate,
+			MaxP95LatencyMs: DefaultGateMaxP95LatencyMs,
+			MinReadyRatio:   DefaultGateMinReadyRatio,
+		}
+	}
+	if g.MaxErrorRate == 0 {
+		g.MaxErrorRate = DefaultGateMaxErrorRate
+	}
+	if g.MaxP95LatencyMs == 0 {
+		g.MaxP95LatencyMs = DefaultGateMaxP95LatencyMs
+	}
+	if g.MinReadyRatio == 0 {
+		g.MinReadyRatio = DefaultGateMinReadyRatio
+	}
+	return g
 }

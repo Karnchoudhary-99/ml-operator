@@ -76,6 +76,14 @@ func TestValidateRejects(t *testing.T) {
 			d.Spec.Strategy = StrategyCanary
 			d.Spec.Canary = &CanarySpec{Weight: 10, Gate: &GateSpec{MinReadyRatio: 1.2}}
 		}, "minReadyRatio"},
+		{"blue-green gate error rate over 1", func(d *ModelDeployment) {
+			d.Spec.Strategy = StrategyBlueGreen
+			d.Spec.BlueGreen = &BlueGreenSpec{Gate: &GateSpec{MaxErrorRate: 1.5}}
+		}, "blueGreen.gate.maxErrorRate"},
+		{"blue-green gate latency negative", func(d *ModelDeployment) {
+			d.Spec.Strategy = StrategyBlueGreen
+			d.Spec.BlueGreen = &BlueGreenSpec{Gate: &GateSpec{MaxP95LatencyMs: -5}}
+		}, "blueGreen.gate.maxP95LatencyMs"},
 		{"autoscaling min over max", func(d *ModelDeployment) {
 			d.Spec.Autoscaling = &AutoscalingSpec{MinReplicas: 5, MaxReplicas: 2, TargetCPUUtilization: 80}
 		}, "minReplicas"},
@@ -252,5 +260,39 @@ func TestApplyDefaultsGateThresholds(t *testing.T) {
 	ApplyDefaults(d)
 	if d.Spec.Canary != nil {
 		t.Fatalf("rolling deployment gained a canary spec: %+v", d.Spec.Canary)
+	}
+}
+
+func TestApplyDefaultsBlueGreen(t *testing.T) {
+	// No blueGreen block at all: the strategy still validates and
+	// the gate defaults are filled in, so a bare `strategy:
+	// BlueGreen` manifest has a real health gate.
+	d := validDeployment()
+	d.Spec.Strategy = StrategyBlueGreen
+	ApplyDefaults(d)
+	if d.Spec.BlueGreen == nil || d.Spec.BlueGreen.Gate == nil {
+		t.Fatal("blue-green spec/gate missing after ApplyDefaults")
+	}
+	if g := d.Spec.BlueGreen.Gate; g.MaxErrorRate != DefaultGateMaxErrorRate || g.MaxP95LatencyMs != DefaultGateMaxP95LatencyMs || g.MinReadyRatio != DefaultGateMinReadyRatio {
+		t.Fatalf("default blue-green gate = %+v", g)
+	}
+	if errs := Validate(d); errs != nil {
+		t.Fatalf("defaulted blue-green deployment should validate, got %v", errs)
+	}
+
+	// A partial gate keeps the user's value and fills the rest.
+	d = validDeployment()
+	d.Spec.Strategy = StrategyBlueGreen
+	d.Spec.BlueGreen = &BlueGreenSpec{Gate: &GateSpec{MaxErrorRate: 0.2}}
+	ApplyDefaults(d)
+	if g := d.Spec.BlueGreen.Gate; g.MaxErrorRate != 0.2 || g.MaxP95LatencyMs != DefaultGateMaxP95LatencyMs || g.MinReadyRatio != DefaultGateMinReadyRatio {
+		t.Fatalf("partial blue-green gate = %+v", g)
+	}
+
+	// A non-blue-green strategy never gains a blue-green spec.
+	d = validDeployment()
+	ApplyDefaults(d)
+	if d.Spec.BlueGreen != nil {
+		t.Fatalf("rolling deployment gained a blue-green spec: %+v", d.Spec.BlueGreen)
 	}
 }

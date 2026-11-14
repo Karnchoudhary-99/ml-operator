@@ -64,6 +64,17 @@ func TestDeploymentFor(t *testing.T) {
 	if got.Selector["ml-operator/canary"] != "false" {
 		t.Fatalf("stable selector missing canary=false: %v", got.Selector)
 	}
+	// Same for green=false: the stable Deployment must never adopt
+	// green pods, and the Service selects green=false.
+	if got.Selector["ml-operator/green"] != "false" {
+		t.Fatalf("stable selector missing green=false: %v", got.Selector)
+	}
+	if got.Labels["ml-operator/green"] != "false" {
+		t.Fatalf("stable pod labels missing green=false: %v", got.Labels)
+	}
+	if got.Green {
+		t.Fatal("stable Deployment must not be marked green")
+	}
 	if got.Labels["ml-operator/canary"] != "false" {
 		t.Fatalf("stable pod labels missing canary=false: %v", got.Labels)
 	}
@@ -81,15 +92,30 @@ func TestServiceFor(t *testing.T) {
 	if got.Name != "iris-mlp" || got.Port != 80 || got.TargetPort != 8080 {
 		t.Fatalf("service wrong: %+v", got)
 	}
-	// The Service selector is the base selector — no canary label —
-	// so during a canary rollout it matches both stable and canary
-	// pods and traffic splits by ready-pod count. The canary label
-	// lives on the Deployments' selectors, not the Service's.
+	// The Service selector is the base selector plus green=false —
+	// no canary label — so during a canary rollout it matches both
+	// stable and canary pods (canary pods carry green=false) and
+	// traffic splits by ready-pod count. The canary label lives on
+	// the Deployments' selectors, not the Service's. Green pods
+	// carry green=true, so the Service never routes to them until
+	// the blue-green cutover flips it to GreenServiceFor.
 	if got.Selector["app.kubernetes.io/name"] != "iris-mlp" {
 		t.Fatalf("service selector wrong: %v", got.Selector)
 	}
+	if got.Selector["ml-operator/green"] != "false" {
+		t.Fatalf("service selector missing green=false: %v", got.Selector)
+	}
 	if _, ok := got.Selector["ml-operator/canary"]; ok {
 		t.Fatal("service selector must not carry the canary label (it selects both pod sets)")
+	}
+
+	// After the cutover the Service selects green pods only.
+	green := GreenServiceFor(d)
+	if green.Selector["ml-operator/green"] != "true" {
+		t.Fatalf("green service selector missing green=true: %v", green.Selector)
+	}
+	if green.Name != got.Name || green.Port != got.Port || green.TargetPort != got.TargetPort {
+		t.Fatalf("green service differs from the blue one except the selector: %+v vs %+v", green, got)
 	}
 }
 
@@ -130,6 +156,39 @@ func TestCanaryDeploymentFor(t *testing.T) {
 	d2.Spec.Canary = &api.CanarySpec{Weight: 50}
 	if got := CanaryDeploymentFor(d2); got.Replicas != 2 {
 		t.Fatalf("50%% canary of 4: replicas = %d, want 2", got.Replicas)
+	}
+}
+
+func TestGreenDeploymentFor(t *testing.T) {
+	d := dep() // 3 replicas
+	d.Spec.Strategy = api.StrategyBlueGreen
+	api.ApplyDefaults(&d)
+
+	got := GreenDeploymentFor(d)
+	if got.Name != "iris-mlp-green" || !got.Green {
+		t.Fatalf("green identity wrong: %+v", got)
+	}
+	if got.Canary {
+		t.Fatal("green Deployment must not be marked canary")
+	}
+	// Green soaks at full size: it serves the whole load after the
+	// cutover, unlike a canary's weight-sized slice.
+	if got.Replicas != 3 {
+		t.Fatalf("green replicas = %d, want 3 (full size)", got.Replicas)
+	}
+	if got.Labels["ml-operator/green"] != "true" {
+		t.Fatalf("green label missing: %v", got.Labels)
+	}
+	if got.Labels["ml-operator/canary"] != "false" {
+		t.Fatalf("green pods must carry canary=false: %v", got.Labels)
+	}
+	// The green selector is disjoint from the stable one: green
+	// pods only, so the stable Deployment never adopts them.
+	if got.Selector["ml-operator/green"] != "true" || got.Selector["ml-operator/canary"] != "false" {
+		t.Fatalf("green selector wrong: %v", got.Selector)
+	}
+	if got.Container.Image != "registry.example.com/iris-mlp:v2" {
+		t.Fatalf("green image wrong: %s", got.Container.Image)
 	}
 }
 

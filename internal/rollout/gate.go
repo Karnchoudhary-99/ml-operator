@@ -2,15 +2,15 @@ package rollout
 
 import "fmt"
 
-// Gate is the health gate a canary step must pass before the rollout
+// Gate is the health gate a rollout step must pass before the rollout
 // advances. Thresholds set to 0 are skipped, except MinReadyRatio,
-// which defaults to 1.0 (every canary pod ready) — a canary that is
-// not fully ready has not proven itself yet. The readiness check is
-// always available (the cluster reports it); error rate, latency and
-// the model-load probe are filled from the cluster metrics source
-// when one reports them, and skipped otherwise.
+// which defaults to 1.0 (every rollout pod ready) — a rollout that
+// is not fully ready has not proven itself yet. The readiness check
+// is always available (the cluster reports it); error rate, latency
+// and the model-load probe are filled from the cluster metrics
+// source when one reports them, and skipped otherwise.
 type Gate struct {
-	// MinReadyRatio is the minimum ready/desired canary replicas
+	// MinReadyRatio is the minimum ready/desired rollout replicas
 	// (0-1). 0 means "all ready".
 	MinReadyRatio float64
 	// MaxErrorRate is the maximum tolerated error fraction (0-1).
@@ -21,7 +21,7 @@ type Gate struct {
 	MaxLatencyP95Ms float64
 }
 
-// Sample is one health observation of the canary.
+// Sample is one health observation of a rollout (canary or green).
 type Sample struct {
 	ReadyReplicas   int32
 	DesiredReplicas int32
@@ -73,11 +73,11 @@ func Evaluate(g Gate, s Sample) Evaluation {
 		minReady = 1.0
 	}
 	if s.DesiredReplicas <= 0 {
-		return Evaluation{Pending: true, Reasons: []string{"no desired canary replicas"}}
+		return Evaluation{Pending: true, Reasons: []string{"no desired rollout replicas"}}
 	}
 	if s.ReadyReplicas <= 0 {
 		return Evaluation{Pending: true, Reasons: []string{
-			fmt.Sprintf("0/%d canary replicas ready (pods still starting)", s.DesiredReplicas),
+			fmt.Sprintf("0/%d rollout replicas ready (pods still starting)", s.DesiredReplicas),
 		}}
 	}
 	// The model-load probe: a canary whose model has not loaded yet

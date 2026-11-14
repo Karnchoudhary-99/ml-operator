@@ -28,6 +28,10 @@ type State struct {
 	Cluster controller.ClusterSnapshot `json:"cluster"`
 	// Rollouts is the per-deployment canary rollout state.
 	Rollouts map[string]rollout.State `json:"rollouts"`
+	// BlueGreenRollouts is the per-deployment blue-green rollout
+	// state. Old state files (written before blue-green existed)
+	// load with this nil, which is the same as "no rollout".
+	BlueGreenRollouts map[string]rollout.BlueGreenState `json:"blueGreenRollouts"`
 	// Events is the recorded operator event history, newest last
 	// (the recorder reverses it for display).
 	Events []metrics.Event `json:"events"`
@@ -124,6 +128,7 @@ func From(reg *registry.Registry, cluster *controller.FakeCluster, rec *controll
 	}
 	s.Cluster = cluster.Snapshot()
 	s.Rollouts = rec.RolloutStates()
+	s.BlueGreenRollouts = rec.BlueGreenStates()
 	s.Events = rec.Events.List()
 	// Events.List returns newest first; store oldest first so the
 	// file reads chronologically.
@@ -148,6 +153,9 @@ func (s *State) Restore() *Runtime {
 	rec := controller.New(reg, cluster)
 	for key, rs := range s.Rollouts {
 		rec.RestoreRolloutState(key, rs)
+	}
+	for key, bs := range s.BlueGreenRollouts {
+		rec.RestoreBlueGreenState(key, bs)
 	}
 	rec.Events.Restore(s.Events)
 	return &Runtime{Registry: reg, Cluster: cluster, Reconciler: rec}

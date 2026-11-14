@@ -82,10 +82,10 @@ func validateResources(r ResourceRequirements) []error {
 func validateStrategy(spec ModelDeploymentSpec) []error {
 	var errs []error
 	switch spec.Strategy {
-	case "", StrategyRecreate, StrategyRolling, StrategyCanary:
+	case "", StrategyRecreate, StrategyRolling, StrategyCanary, StrategyBlueGreen:
 		// "" is accepted here; ApplyDefaults fills it in.
 	default:
-		errs = append(errs, fmt.Errorf("spec.strategy %q must be one of Recreate, RollingUpdate, Canary", spec.Strategy))
+		errs = append(errs, fmt.Errorf("spec.strategy %q must be one of Recreate, RollingUpdate, Canary, BlueGreen", spec.Strategy))
 		return errs
 	}
 	if spec.Strategy == StrategyCanary {
@@ -102,17 +102,42 @@ func validateStrategy(spec ModelDeploymentSpec) []error {
 		if spec.Canary.IntervalSeconds < 0 {
 			errs = append(errs, fmt.Errorf("spec.canary.intervalSeconds must be >= 0, got %d", spec.Canary.IntervalSeconds))
 		}
-		if g := spec.Canary.Gate; g != nil {
-			if g.MaxErrorRate < 0 || g.MaxErrorRate > 1 {
-				errs = append(errs, fmt.Errorf("spec.canary.gate.maxErrorRate must be between 0 and 1, got %g", g.MaxErrorRate))
-			}
-			if g.MaxP95LatencyMs < 0 {
-				errs = append(errs, fmt.Errorf("spec.canary.gate.maxP95LatencyMs must be >= 0, got %g", g.MaxP95LatencyMs))
-			}
-			if g.MinReadyRatio < 0 || g.MinReadyRatio > 1 {
-				errs = append(errs, fmt.Errorf("spec.canary.gate.minReadyRatio must be between 0 and 1, got %g", g.MinReadyRatio))
-			}
-		}
+		errs = append(errs, validateGate(spec.Canary.Gate, "spec.canary.gate")...)
+	}
+	if spec.Strategy == StrategyBlueGreen {
+		// A blue-green rollout needs no config of its own: the
+		// green Deployment is always full-size, so a nil spec
+		// just takes the operator gate defaults. A gate that is
+		// present still has to be in range.
+		errs = append(errs, validateGate(gateOf(spec.BlueGreen), "spec.blueGreen.gate")...)
+	}
+	return errs
+}
+
+// gateOf returns the gate of a blue-green spec, or nil when the spec
+// (or its gate) is absent.
+func gateOf(b *BlueGreenSpec) *GateSpec {
+	if b == nil {
+		return nil
+	}
+	return b.Gate
+}
+
+// validateGate checks one gate's thresholds. A nil gate is valid —
+// ApplyDefaults fills it in before the gate is ever evaluated.
+func validateGate(g *GateSpec, path string) []error {
+	if g == nil {
+		return nil
+	}
+	var errs []error
+	if g.MaxErrorRate < 0 || g.MaxErrorRate > 1 {
+		errs = append(errs, fmt.Errorf("%s.maxErrorRate must be between 0 and 1, got %g", path, g.MaxErrorRate))
+	}
+	if g.MaxP95LatencyMs < 0 {
+		errs = append(errs, fmt.Errorf("%s.maxP95LatencyMs must be >= 0, got %g", path, g.MaxP95LatencyMs))
+	}
+	if g.MinReadyRatio < 0 || g.MinReadyRatio > 1 {
+		errs = append(errs, fmt.Errorf("%s.minReadyRatio must be between 0 and 1, got %g", path, g.MinReadyRatio))
 	}
 	return errs
 }

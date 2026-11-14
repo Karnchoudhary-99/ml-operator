@@ -72,7 +72,7 @@ func mapDeployment(tree map[string]any, d *api.ModelDeployment) error {
 func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
-		"canary", "autoscaling", "env", "health",
+		"canary", "blueGreen", "autoscaling", "env", "health",
 	}, "spec"); err != nil {
 		return err
 	}
@@ -186,38 +186,32 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 			cs.IntervalSeconds = int32(n)
 		}
 		if raw, ok := c["gate"]; ok {
-			g, ok := raw.(map[string]any)
-			if !ok {
-				return fmt.Errorf("spec.canary.gate: must be a mapping")
-			}
-			if err := checkKeys(g, []string{"maxErrorRate", "maxP95LatencyMs", "minReadyRatio"}, "spec.canary.gate"); err != nil {
+			gs, err := parseGate(raw, "spec.canary.gate")
+			if err != nil {
 				return err
-			}
-			gs := &api.GateSpec{}
-			if v, ok := g["maxErrorRate"]; ok {
-				f, err := floatField(v, "spec.canary.gate.maxErrorRate")
-				if err != nil {
-					return err
-				}
-				gs.MaxErrorRate = f
-			}
-			if v, ok := g["maxP95LatencyMs"]; ok {
-				f, err := floatField(v, "spec.canary.gate.maxP95LatencyMs")
-				if err != nil {
-					return err
-				}
-				gs.MaxP95LatencyMs = f
-			}
-			if v, ok := g["minReadyRatio"]; ok {
-				f, err := floatField(v, "spec.canary.gate.minReadyRatio")
-				if err != nil {
-					return err
-				}
-				gs.MinReadyRatio = f
 			}
 			cs.Gate = gs
 		}
 		s.Canary = cs
+	}
+
+	if raw, ok := spec["blueGreen"]; ok {
+		b, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("spec.blueGreen: must be a mapping")
+		}
+		if err := checkKeys(b, []string{"gate"}, "spec.blueGreen"); err != nil {
+			return err
+		}
+		bs := &api.BlueGreenSpec{}
+		if raw, ok := b["gate"]; ok {
+			gs, err := parseGate(raw, "spec.blueGreen.gate")
+			if err != nil {
+				return err
+			}
+			bs.Gate = gs
+		}
+		s.BlueGreen = bs
 	}
 
 	if raw, ok := spec["autoscaling"]; ok {
@@ -305,6 +299,41 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 		}
 	}
 	return nil
+}
+
+// parseGate reads a gate mapping (maxErrorRate, maxP95LatencyMs,
+// minReadyRatio) shared by the canary and blue-green blocks.
+func parseGate(raw any, path string) (*api.GateSpec, error) {
+	g, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: must be a mapping", path)
+	}
+	if err := checkKeys(g, []string{"maxErrorRate", "maxP95LatencyMs", "minReadyRatio"}, path); err != nil {
+		return nil, err
+	}
+	gs := &api.GateSpec{}
+	if v, ok := g["maxErrorRate"]; ok {
+		f, err := floatField(v, path+".maxErrorRate")
+		if err != nil {
+			return nil, err
+		}
+		gs.MaxErrorRate = f
+	}
+	if v, ok := g["maxP95LatencyMs"]; ok {
+		f, err := floatField(v, path+".maxP95LatencyMs")
+		if err != nil {
+			return nil, err
+		}
+		gs.MaxP95LatencyMs = f
+	}
+	if v, ok := g["minReadyRatio"]; ok {
+		f, err := floatField(v, path+".minReadyRatio")
+		if err != nil {
+			return nil, err
+		}
+		gs.MinReadyRatio = f
+	}
+	return gs, nil
 }
 
 // strField reads a string field: ok is false when the key is absent.

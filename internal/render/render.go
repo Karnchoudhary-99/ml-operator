@@ -1,8 +1,9 @@
 // Package render turns a ModelDeployment into the plain-Go objects
 // the reconciler applies to the cluster: a Deployment, a Service,
-// and (for canary rollouts) a second, small canary Deployment. The
-// types here are dependency-free value structs — no client-go — so
-// rendering and diffing stay testable without a cluster. The
+// and (for canary rollouts) a second, small canary Deployment, or
+// (for blue-green rollouts) a second, full-size green Deployment.
+// The types here are dependency-free value structs — no client-go —
+// so rendering and diffing stay testable without a cluster. The
 // Kubernetes-backed types land with the controller-runtime phase.
 package render
 
@@ -55,7 +56,10 @@ type Deployment struct {
 	Selector map[string]string
 	// Canary marks the extra small Deployment of a canary rollout;
 	// the stable Deployment always has Canary false.
-	Canary    bool
+	Canary bool
+	// Green marks the extra full-size Deployment of a blue-green
+	// rollout; the stable Deployment always has Green false.
+	Green     bool
 	Container Container
 }
 
@@ -125,12 +129,17 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 	// Deployments' selectors are disjoint even though both share
 	// the base labels the Service selects on.
 	labels["ml-operator/canary"] = "false"
+	// Stable pods also carry green=false, for the same reason in
+	// the other direction: a blue-green rollout's green Deployment
+	// selects green pods only, and the Service (which selects
+	// green=false) never routes to green pods until the cutover.
+	labels["ml-operator/green"] = "false"
 	return Deployment{
 		Name:      d.Name,
 		Namespace: d.Namespace,
 		Replicas:  replicas,
 		Labels:    labels,
-		Selector:  deploymentSelector(d, "false"),
+		Selector:  deploymentSelector(d, "false", "false"),
 		Canary:    false,
 		Container: containerFor(d),
 	}
@@ -169,34 +178,82 @@ func CanaryDeploymentForWeight(d api.ModelDeployment, weight int32) Deployment {
 	dep.Replicas = rollout.CanaryReplicas(total, weight)
 	dep.Canary = true
 	dep.Labels["ml-operator/canary"] = "true"
-	dep.Selector = deploymentSelector(d, "true")
+	dep.Selector = deploymentSelector(d, "true", "false")
+	return dep
+}
+
+// GreenDeploymentFor renders the full-size green Deployment for a
+// blue-green rollout: same image and container as the stable
+// Deployment, but named "<name>-green", labelled as green, and
+// sized to the full replica count — green serves the whole load
+// after the cutover, so it soaks at the size it will serve at. The
+// green Deployment selects green pods only; the stable Deployment
+// selects blue pods only. The Service selector matches blue pods
+// until the cutover, then green pods, so traffic never splits.
+func GreenDeploymentFor(d api.ModelDeployment) Deployment {
+	dep := DeploymentFor(d)
+	total := int32(1)
+	if d.Spec.Replicas != nil {
+		total = *d.Spec.Replicas
+	}
+	dep.Name = d.Name + "-green"
+	dep.Replicas = total
+	dep.Green = true
+	dep.Labels["ml-operator/green"] = "true"
+	dep.Selector = deploymentSelector(d, "false", "true")
 	return dep
 }
 
 // deploymentSelector is the Deployment selector for a model's pods:
-// the base selector plus the canary label, so the stable and canary
-// Deployments never select each other's pods.
-func deploymentSelector(d api.ModelDeployment, canary string) map[string]string {
+// the base selector plus the canary and green labels, so the
+// stable, canary and green Deployments never select each other's
+// pods.
+func deploymentSelector(d api.ModelDeployment, canary, green string) map[string]string {
 	sel := Selector(d)
 	sel["ml-operator/canary"] = canary
+	sel["ml-operator/green"] = green
 	return sel
 }
 
 // ServiceFor renders the ClusterIP Service fronting d. Clients
 // connect on port 80; traffic is forwarded to the container port.
-// The selector is the base selector (no canary label), so during a
-// canary rollout it matches both stable and canary pods and traffic
-// splits by ready-pod count — the weight ladder in internal/rollout
-// sizes the canary, which is what sets the split.
+// The selector is the base selector plus green=false, so during a
+// canary rollout it matches both stable and canary pods (canary
+// pods carry green=false) and traffic splits by ready-pod count —
+// the weight ladder in internal/rollout sizes the canary, which is
+// what sets the split. During a blue-green rollout it matches only
+// blue pods: green pods carry green=true and get no traffic until
+// the cutover flips the Service to GreenServiceFor.
 func ServiceFor(d api.ModelDeployment) Service {
 	return Service{
 		Name:       d.Name,
 		Namespace:  d.Namespace,
 		Labels:     Labels(d),
-		Selector:   Selector(d),
+		Selector:   serviceSelector(d, "false"),
 		Port:       80,
 		TargetPort: d.Spec.Port,
 	}
+}
+
+// GreenServiceFor renders the Service as it looks after a
+// blue-green cutover: same as ServiceFor, but the selector requires
+// green=true, so clients reach the green Deployment. The reconciler
+// flips to this Service when the soak gate passes, then folds the
+// green image into the stable Deployment and flips back.
+func GreenServiceFor(d api.ModelDeployment) Service {
+	svc := ServiceFor(d)
+	svc.Selector = serviceSelector(d, "true")
+	return svc
+}
+
+// serviceSelector is the Service selector for a model's pods: the
+// base selector plus the green label. The canary label is
+// deliberately absent — the Service must select both stable and
+// canary pods during a canary rollout.
+func serviceSelector(d api.ModelDeployment, green string) map[string]string {
+	sel := Selector(d)
+	sel["ml-operator/green"] = green
+	return sel
 }
 
 // HPAFor renders the HorizontalPodAutoscaler for d, or false when

@@ -16,7 +16,8 @@ with the desired state.
 - [x] In-memory model registry (register, list, get, delete, watch)
 - [x] Reconciler core (desired vs live state, diff, apply plan)
 - [x] Deployment + Service rendering (image, replicas, resources, ports)
-- [x] Rollout strategies (recreate, rolling update, canary)
+- [x] Rollout strategies (recreate, rolling update, canary, blue-green)
+- [x] Blue-green rollout (green soaks at full size, Service cutover, fold)
 - [x] Autoscaling (HPA from CPU / request-rate / GPU signals)
 - [x] Health + readiness gates (model-load probe, traffic shift)
 - [x] Per-rollout health-gate thresholds (`canary.gate`)
@@ -142,6 +143,17 @@ mlop rollout status iris-mlp
 #   failures:   0 consecutive gate failures
 #   state:      in progress (phase Progressing)
 ```
+
+A blue-green rollout (`strategy: BlueGreen`,
+`examples/iris-mlp-bluegreen.yaml`) never splits traffic: v2
+soaks as a full-size green Deployment beside stable v1, the
+Service flips to green once the same health gate passes, and the
+next reconcile folds green into stable. `mlop ready` and `mlop
+load` take a `--green` flag to drive the green Deployment's
+readiness and model-load probe, and `mlop rollout status`
+reports soaking / switched / folded / aborted.
+`examples/bluegreen-tour.sh` drives both stories end to end
+(hold-then-switch-and-fold, fail-then-abort).
 
 `examples/mlop-tour.sh` drives the whole flow end to end —
 apply v1, ready, canary v2 (10% → 100% → promote), then asserts

@@ -22,7 +22,7 @@ manifest ──► api ──► registry ──► controller ──► render 
 | `internal/api` | `ModelDeployment` types, `ApplyDefaults`, `Validate` |
 | `internal/registry` | Thread-safe in-memory registry, revisions, watch events |
 | `internal/render` | Desired Deployment / Service / HPA, and diff reasons |
-| `internal/rollout` | Canary weight ladder, health gate, rollout state machine |
+| `internal/rollout` | Canary weight ladder, blue-green state machine, health gate, rollout state |
 | `internal/autoscale` | Replica proposals + scale-down stabilization window |
 | `internal/controller` | Reconciler: plan, apply, gate, status, garbage collection |
 | `internal/metrics` | Prometheus-style collector + Kubernetes-style event recorder |
@@ -42,10 +42,12 @@ cluster every time, and applies only the difference:
    rest. An invalid spec never reaches the cluster — the deployment
    goes `Failed` with the validation errors in its status message.
 2. **Rollout state.** A Canary strategy keeps per-generation rollout
-   state (weight ladder, step, consecutive failures). Any other
-   strategy drops it, so returning to Canary starts fresh. A done
-   state (promoted or aborted) is kept, so reconciling the same
-   generation never restarts the rollout.
+   state (weight ladder, step, consecutive failures); a BlueGreen
+   strategy keeps its own (soaking/switched, consecutive failures).
+   Any other strategy drops both, so returning to Canary or
+   BlueGreen starts fresh. A done state (promoted/folded or
+   aborted) is kept, so reconciling the same generation never
+   restarts the rollout.
 3. **Autoscaling.** When enabled, the scaler decides the effective
    replica count from the latest cluster metrics (largest proposal
    wins, clamped to min/max, scale-down held for 5 minutes). The
@@ -54,20 +56,27 @@ cluster every time, and applies only the difference:
 4. **Render + plan.** `render` builds the desired Deployment,
    Service and HPA. During a canary the stable Deployment keeps
    serving the previous image until promotion (only the image and
-   version label are pinned). `plan` diffs desired vs live and
-   returns the minimal ordered actions: Deployment, canary,
-   Service, HPA. Recreate deletes before creating, so old and new
-   model versions never serve side by side.
+   version label are pinned); during a blue-green rollout the same
+   pinning holds while green soaks, and the desired Service selects
+   blue pods until the switch flips it to green. `plan` diffs
+   desired vs live and returns the minimal ordered actions:
+   Deployment, canary, green, Service, HPA. Recreate deletes
+   before creating, so old and new model versions never serve side
+   by side. A blue-green rollout only exists while a version change
+   is in flight — a first deploy or a replica-only change applies
+   directly, with no green Deployment at all.
 5. **Apply.** Each action executes against the `Cluster`
    interface. A failed apply is `Degraded` with requeue, not
    `Failed` — the spec is fine, the cluster operation broke.
-6. **Gate (canary only).** The health gate reads the live canary's
-   readiness plus error rate, p95 latency and the model-load probe
-   from cluster metrics, against the rollout's own thresholds
-   (`canary.gate`, defaulted to 5% errors / 500ms p95 / all pods
-   ready). The state machine holds, advances, promotes or aborts
-   (3 consecutive failures). A still-loading model holds without
-   burning failure budget; a failed load is a real failure.
+6. **Gate (canary and blue-green).** The health gate reads the live
+   canary's (or green Deployment's) readiness plus error rate, p95
+   latency and the model-load probe from cluster metrics, against
+   the rollout's own thresholds (`canary.gate` or `blueGreen.gate`,
+   both defaulted to 5% errors / 500ms p95 / all pods ready). The
+   canary state machine holds, advances, promotes or aborts (3
+   consecutive failures); the blue-green one holds, switches, folds
+   or aborts. A still-loading model holds without burning failure
+   budget; a failed load is a real failure.
 7. **Status.** The phase is recomputed from readiness every time
    (`Available` at full replicas, `Degraded` below, `Progressing`
    while converging) and the conditions are rebuilt, so a stale
@@ -101,12 +110,38 @@ no events, no scaler or rollout state. `mlop diff` is built on it.
   the stable Deployment keeps serving the previous version, and
   the deployment stays `Degraded` until a new generation arrives.
 
+Blue-green runs a smaller machine — there is no weight ladder, so
+traffic never splits:
+
+```
+   soak ◄── gate fails / model loading ─┐
+     │                                  │
+     ├─ gate passes ─► switch ─► fold   │
+     │                                  │
+     └─ 3 failures ─► abort ─────────────┘
+```
+
+- **Soak:** green runs at full size beside stable; the Service
+  still selects blue pods, so clients never see green.
+- **Switch:** gate passed — the Service selector flips to green.
+  The switch is the commit point: the soak gate was the safety
+  check.
+- **Fold:** the next reconcile applies the new image to the stable
+  Deployment, flips the Service back to blue (which is now the new
+  version), deletes green, and records the replaced image as the
+  rollback target — the same `status.previousImage` a canary
+  promotion records.
+- **Abort:** 3 consecutive gate failures — green is deleted, the
+  Service never flipped, stable keeps serving the previous version,
+  and the deployment stays `Degraded` until a new generation arrives.
+
 ## Generations and rollback
 
 The generation is the CLI's job, never the manifest's: a new key
 starts at 1, a changed spec bumps it, an identical re-apply keeps
 it. The reconciler records the replaced image on every successful
-image change (canary promotion or direct rolling/recreate update),
+image change (canary promotion, blue-green fold, or direct
+rolling/recreate update),
 so `mlop rollback` can restore it as a new generation — rolling
 out through the deployment's normal strategy, never by editing
 history. A second rollback returns to the version just left.

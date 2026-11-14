@@ -22,6 +22,25 @@ flight, `mlop status` re-reconciles on every call, so the rollout
 moves as you watch it — but the step interval still gates
 advances: a step does not jump early just because you polled.
 
+A blue-green rollout works the same way, without the ladder:
+
+```bash
+mlop diff -f examples/iris-mlp-bluegreen.yaml   # green create, stable pinned
+mlop apply -f examples/iris-mlp-bluegreen.yaml  # registers generation N+1, reconciles once
+mlop rollout status iris-mlp                    # soaking / switched / folded / aborted
+mlop ready iris-mlp --replicas 2 --green        # green pods pass the gate
+mlop load iris-mlp --green                      # green model-load probe
+```
+
+While green soaks, `mlop status` still shows the old version
+serving — that is the point. Once the gate passes, the Service
+switches to green, and the next reconcile folds green into
+stable. `mlop rollout status` shows the switch as `switched`
+and the fold as `folded`; the fold records the replaced image as
+the rollback target, exactly like a canary promotion. A first
+deploy or a replica-only change under `BlueGreen` applies
+directly, with no green Deployment at all.
+
 ## Rolling back
 
 ```bash
@@ -58,8 +77,8 @@ prints the same exposition at the end (`go run ./cmd/operator
   — one increment per reconcile outcome. A rising `degraded`
   share means rollouts are stuck or replicas are short.
 - `ml_operator_rollouts_total{result=promoted|aborted}` — canary
-  outcomes. Aborts deserve a look at the gate: `mlop logs` names
-  the failing check.
+  and blue-green outcomes. Aborts deserve a look at the gate:
+  `mlop logs` names the failing check.
 - `ml_operator_scale_events_total{direction=up|down|held}` —
   autoscaling activity. Frequent `held` entries are normal: the
   5-minute scale-down stabilization window is doing its job.
@@ -79,6 +98,18 @@ new version simply did not promote. Read the gate reason in
 `mlop logs <name>` (look for `RolloutAborted`), fix the model or
 loosen the gate in the manifest (`canary.gate`), and apply a new
 generation. The aborted generation never restarts on its own.
+
+**Blue-green aborted, deployment `Degraded`.** Same story, one
+difference: the Service never flipped, so no client ever saw the
+new version. Look for `BlueGreenAborted` in `mlop logs <name>`,
+fix the model or loosen `blueGreen.gate`, and apply a new
+generation.
+
+**Blue-green holds at soaking with no failure.** Either the model
+is still loading (`mlop load <name> --green` reports the probe
+state; a loading model holds without burning failure budget) or
+green pods are not ready yet (`mlop ready <name> --replicas N
+--green`). Both clear on their own.
 
 **Canary holds at a weight with no failure.** Either the model is
 still loading (`mlop load <name> --canary` reports the probe
@@ -105,9 +136,10 @@ the world.
 ## Pre-flight checklist (before every apply)
 
 1. `mlop diff -f <manifest>` — read the plan, not just the phase.
-2. For a canary: is the gate right for this model? A
-   latency-sensitive model wants a tighter `canary.gate`
-   (`maxP95LatencyMs`); a noisy one a looser `maxErrorRate`.
-   Thresholds tune the gate, they never disable a check.
+2. For a canary or blue-green rollout: is the gate right for this
+   model? A latency-sensitive model wants a tighter gate
+   (`canary.gate` / `blueGreen.gate`, `maxP95LatencyMs`); a noisy
+   one a looser `maxErrorRate`. Thresholds tune the gate, they
+   never disable a check.
 3. After apply: `mlop status` + `mlop rollout status` until the
    phase is `Available` (or the rollout is promoted).

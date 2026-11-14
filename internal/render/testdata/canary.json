@@ -5,6 +5,7 @@
   "Labels": {
     "app.kubernetes.io/name": "iris-mlp",
     "ml-operator/canary": "true",
+    "ml-operator/green": "false",
     "ml-operator/managed-by": "ml-operator",
     "ml-operator/model": "iris-mlp",
     "ml-operator/version": "v1"
@@ -12,9 +13,11 @@
   "Selector": {
     "app.kubernetes.io/name": "iris-mlp",
     "ml-operator/canary": "true",
+    "ml-operator/green": "false",
     "ml-operator/managed-by": "ml-operator"
   },
   "Canary": true,
+  "Green": false,
   "Container": {
     "Name": "model",
     "Image": "registry.example.com/iris-mlp:v1",
