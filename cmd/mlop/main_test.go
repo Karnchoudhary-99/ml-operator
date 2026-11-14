@@ -377,3 +377,89 @@ func TestRollbackFlow(t *testing.T) {
 		t.Fatalf("logs exit %d, out %q", code, out)
 	}
 }
+
+// TestLoadCommand checks `mlop load`: it reports the probe outcome
+// for the stable Deployment, errors for unknown deployments and
+// missing canaries, and drives a failed-load canary to abort
+// through the CLI (three strikes, then Degraded with the stable
+// Deployment still on v1).
+func TestLoadCommand(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	manifest := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply failed")
+	}
+
+	code, out, _ := runCLIState(t, state, "load", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "model loaded for default/iris-mlp") {
+		t.Fatalf("load exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "load", "iris-mlp", "--fail")
+	if code != 0 || !strings.Contains(out, "model failed to load for default/iris-mlp") {
+		t.Fatalf("load --fail exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "load", "iris-mlp", "--loading")
+	if code != 0 || !strings.Contains(out, "model still loading for default/iris-mlp") {
+		t.Fatalf("load --loading exit %d, out %q", code, out)
+	}
+	code, _, errOut := runCLIState(t, state, "load", "iris-mlp", "--loading", "--fail")
+	if code == 0 || !strings.Contains(errOut, "mutually exclusive") {
+		t.Fatalf("load --loading --fail exit %d, err %q", code, errOut)
+	}
+	code, _, errOut = runCLIState(t, state, "load", "nope")
+	if code == 0 || !strings.Contains(errOut, "no deployment") {
+		t.Fatalf("load unknown exit %d, err %q", code, errOut)
+	}
+	// No canary Deployment exists for a RollingUpdate deployment.
+	code, _, errOut = runCLIState(t, state, "load", "iris-mlp", "--canary")
+	if code == 0 || !strings.Contains(errOut, "no Deployment") {
+		t.Fatalf("load --canary exit %d, err %q", code, errOut)
+	}
+	code, _, _ = runCLIState(t, state, "load")
+	if code == 0 {
+		t.Fatalf("load without a name should fail")
+	}
+}
+
+func TestLoadFailedCanaryAbortsThroughCLI(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	v1 := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", v1); code != 0 {
+		t.Fatalf("apply v1 failed")
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready v1 failed")
+	}
+	canary := writeManifest(t, irisCanary)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", canary); code != 0 {
+		t.Fatalf("canary apply failed")
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2", "--canary"); code != 0 {
+		t.Fatalf("ready canary failed")
+	}
+
+	// Strike 1: the probe reports the model failed to load.
+	code, out, _ := runCLIState(t, state, "load", "iris-mlp", "--canary", "--fail")
+	if code != 0 || !strings.Contains(out, "model failed to load") || !strings.Contains(out, "phase=Progressing") {
+		t.Fatalf("load --fail exit %d, out %q", code, out)
+	}
+	// Strikes 2 and 3 come from plain reconciles (rollout status
+	// reconciles first): the third aborts the rollout.
+	if code, _, _ := runCLIState(t, state, "rollout", "status", "iris-mlp"); code != 0 {
+		t.Fatalf("rollout status (strike 2) failed")
+	}
+	code, out, _ = runCLIState(t, state, "rollout", "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "state:      aborted") {
+		t.Fatalf("rollout status (strike 3) exit %d, out %q", code, out)
+	}
+	// The deployment is Degraded, the stable Deployment still
+	// serves v1, and the abort is in the event log.
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "phase:      Degraded") || !strings.Contains(out, "registry.example.com/iris-mlp:v1") {
+		t.Fatalf("status after abort exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "logs", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "RolloutAborted") {
+		t.Fatalf("logs after abort exit %d, out %q", code, out)
+	}
+}

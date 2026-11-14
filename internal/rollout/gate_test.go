@@ -107,4 +107,20 @@ func TestEvaluateModelLoadProbe(t *testing.T) {
 	if !ev.Pass {
 		t.Fatalf("probe unknown = %+v, want pass (check skipped)", ev)
 	}
+	// Probe reported a failed load: a real failure, not a hold — it
+	// burns failure budget so the rollout aborts instead of
+	// waiting forever for a model that will never load.
+	ev = Evaluate(Gate{}, Sample{ReadyReplicas: 2, DesiredReplicas: 2, ModelLoadKnown: true, ModelLoaded: false, ModelLoadFailed: true})
+	if ev.Pass || ev.Pending {
+		t.Fatalf("model load failed = %+v, want fail, not pass or pending", ev)
+	}
+	if !strings.Contains(strings.Join(ev.Reasons, " "), "model failed to load") {
+		t.Fatalf("reasons = %v, want model-load-failure reason", ev.Reasons)
+	}
+	// Failed flag without a probe report means nothing: the probe
+	// has not spoken, so the check is skipped like the others.
+	ev = Evaluate(Gate{}, Sample{ReadyReplicas: 2, DesiredReplicas: 2, ModelLoadKnown: false, ModelLoaded: false, ModelLoadFailed: true})
+	if !ev.Pass {
+		t.Fatalf("failed flag without probe report = %+v, want pass (check skipped)", ev)
+	}
 }

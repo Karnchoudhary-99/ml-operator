@@ -276,6 +276,23 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		return r.reconcileCanary(key, d, rs, actions)
 	}
 
+	// A rollout that aborted for this generation stays Degraded:
+	// the stable Deployment still serves the previous version, not
+	// the desired one, so readiness alone must not flip the
+	// deployment back to Available on the next reconcile. The
+	// detailed reason lives in the RolloutAborted event. A new
+	// generation starts a fresh rollout and leaves this branch.
+	if hasRollout && rs.Done && rs.Aborted {
+		ready := r.Cluster.ReadyReplicas(key)
+		serving := ""
+		if liveOK {
+			serving = liveStable.Container.Image
+		}
+		msg := fmt.Sprintf("canary rollout aborted — stable still serves %s", serving)
+		r.updateStatus(key, d, api.PhaseDegraded, ready, msg)
+		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
+	}
+
 	// A direct image change (rolling update or recreate, no canary
 	// in flight): the image being replaced becomes the rollback
 	// target. The apply above already succeeded — a failed apply
@@ -342,6 +359,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			sample.LatencyP95Ms = m.LatencyP95Ms
 			sample.ModelLoadKnown = m.ModelLoadKnown
 			sample.ModelLoaded = m.ModelLoaded
+			sample.ModelLoadFailed = m.ModelLoadFailed
 		}
 		ev = rollout.Evaluate(gateFor(d), sample)
 	} else {

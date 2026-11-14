@@ -27,6 +27,9 @@ type ClusterMetrics struct {
 	// ModelLoaded is true when the model finished loading into the
 	// serving container.
 	ModelLoaded bool
+	// ModelLoadFailed is true when the probe reported that the model
+	// failed to load. Only meaningful when ModelLoadKnown is true.
+	ModelLoadFailed bool
 }
 
 // Cluster is the minimal cluster surface the reconciler needs. It is

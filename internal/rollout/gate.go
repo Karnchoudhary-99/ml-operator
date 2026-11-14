@@ -41,6 +41,12 @@ type Sample struct {
 	// serving container. A canary whose model is not loaded yet has
 	// not proven itself, whatever its pod readiness says.
 	ModelLoaded bool
+	// ModelLoadFailed is true when the probe reported that the model
+	// failed to load (bad artifact, OOM while loading, missing
+	// weights). Unlike "not loaded yet", a failed load is a real
+	// failure: it burns failure budget and can abort the rollout.
+	// It only means something when ModelLoadKnown is true.
+	ModelLoadFailed bool
 }
 
 // Evaluation is the outcome of checking a Sample against a Gate.
@@ -77,6 +83,12 @@ func Evaluate(g Gate, s Sample) Evaluation {
 	// The model-load probe: a canary whose model has not loaded yet
 	// is pending, not failed — the pods are up but the model is
 	// still warming up, so the gate must not burn failure budget.
+	// A canary whose model FAILED to load is a real failure: the
+	// rollout should hold briefly, then abort, not wait forever
+	// for a model that will never load.
+	if s.ModelLoadKnown && s.ModelLoadFailed {
+		return Evaluation{Pass: false, Reasons: []string{"model failed to load (model-load probe)"}}
+	}
 	if s.ModelLoadKnown && !s.ModelLoaded {
 		return Evaluation{Pending: true, Reasons: []string{"model not loaded yet (model-load probe)"}}
 	}

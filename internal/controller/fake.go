@@ -132,6 +132,53 @@ func (f *FakeCluster) SetMetrics(key string, m ClusterMetrics) {
 	}
 }
 
+// setModelLoad records one model-load probe outcome for the
+// Deployment at key, keeping any load/health observation already
+// recorded for it. It is a no-op for a Deployment the fake has
+// never seen — a probe only makes sense for applied objects. The
+// probe state lives in the metrics entry, so Snapshot/Restore
+// persist it with the rest of the cluster state.
+func (f *FakeCluster) setModelLoad(key string, known, loaded, failed bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.deployments[key]; !ok {
+		return
+	}
+	m, ok := f.metrics[key]
+	if !ok {
+		// No load observation yet: keep error rate unknown (-1)
+		// instead of the zero value, which would read as "0 errors
+		// observed".
+		m = ClusterMetrics{ErrorRate: -1}
+	}
+	m.ModelLoadKnown = known
+	m.ModelLoaded = loaded
+	m.ModelLoadFailed = failed
+	f.metrics[key] = m
+}
+
+// SetModelLoading reports that the model-load probe is still
+// waiting for the model to finish loading into the serving
+// container. The gate treats this as pending, never a failure.
+func (f *FakeCluster) SetModelLoading(key string) {
+	f.setModelLoad(key, true, false, false)
+}
+
+// SetModelLoaded reports that the model-load probe saw the model
+// finish loading. The gate then judges the canary on readiness
+// and traffic signals as usual.
+func (f *FakeCluster) SetModelLoaded(key string) {
+	f.setModelLoad(key, true, true, false)
+}
+
+// SetModelLoadFailed reports that the model-load probe saw the
+// model fail to load (bad artifact, OOM, missing weights). The
+// gate treats this as a real failure, so the rollout aborts
+// after three strikes instead of waiting forever.
+func (f *FakeCluster) SetModelLoadFailed(key string) {
+	f.setModelLoad(key, true, false, true)
+}
+
 // ReadyReplicas implements Cluster.
 func (f *FakeCluster) ReadyReplicas(key string) int32 {
 	f.mu.Lock()
