@@ -8,7 +8,7 @@
 //
 //	mlop [--state path] <command> [args]
 //
-// Commands: apply, diff, status, logs, rollout, ready, load, rollback, version.
+// Commands: apply, diff, status, logs, history, rollout, ready, load, rollback, version.
 package main
 
 import (
@@ -60,6 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdStatus(opts, rest[1:])
 	case "logs":
 		return cmdLogs(opts, rest[1:])
+	case "history":
+		return cmdHistory(opts, rest[1:])
 	case "rollout":
 		return cmdRollout(opts, rest[1:])
 	case "ready":
@@ -91,6 +93,7 @@ Commands:
                                      show the apply plan without changing state
   status [name] [--json]             show deployments and their phases
   logs <name> [--tail N] [--json]         show recorded events for a deployment
+  history <name> [--tail N] [--json] show the deployment audit trail (generation/phase/image transitions)
   rollout status <name>                show canary rollout progress
   ready <name> --replicas N [--canary] simulate pods passing the readiness gate
   load <name> [--canary] [--loading | --fail] simulate the model-load probe (loaded, loading, or failed)

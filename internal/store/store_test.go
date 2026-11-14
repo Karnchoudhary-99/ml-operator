@@ -80,6 +80,19 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("restored events lost the Available event: %v", events)
 	}
 
+	// The audit trail survives the round trip too: Progressing
+	// after the first reconcile, Available after the pods came up.
+	hist := rt.Reconciler.History("default/iris-mlp")
+	if len(hist) != 2 {
+		t.Fatalf("restored history = %d entries, want 2", len(hist))
+	}
+	if hist[0].Phase != api.PhaseProgressing || hist[1].Phase != api.PhaseAvailable {
+		t.Fatalf("restored history phases = %s/%s, want Progressing/Available", hist[0].Phase, hist[1].Phase)
+	}
+	if hist[1].Image != "registry.example.com/iris-mlp:v1" || hist[1].Version != "v1" {
+		t.Fatalf("restored history entry = %+v, want v1 image/version", hist[1])
+	}
+
 	// The restored runtime reconciles in sync: nothing to apply.
 	res, err := rt.Reconciler.Reconcile("default/iris-mlp")
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/autoscale"
+	"github.com/Karnchoudhary-99/ml-operator/internal/history"
 	"github.com/Karnchoudhary-99/ml-operator/internal/metrics"
 	"github.com/Karnchoudhary-99/ml-operator/internal/registry"
 	"github.com/Karnchoudhary-99/ml-operator/internal/render"
@@ -106,6 +107,12 @@ type Reconciler struct {
 	// "namespace/name". It holds the scale-down stabilization
 	// window; deleting a deployment drops its scaler.
 	scalers map[string]*autoscale.Scaler
+	// histories is the per-deployment audit trail, keyed by
+	// "namespace/name". updateStatus appends one entry per real
+	// transition (generation, phase, or desired image change);
+	// a steady deployment reconciling every few seconds records
+	// nothing new, so the log stays readable.
+	histories map[string]*history.Log
 }
 
 // New returns a Reconciler over reg and cluster.
@@ -118,7 +125,42 @@ func New(reg *registry.Registry, cluster Cluster) *Reconciler {
 		rollouts:   make(map[string]rollout.State),
 		blueGreens: make(map[string]rollout.BlueGreenState),
 		scalers:    make(map[string]*autoscale.Scaler),
+		histories:  make(map[string]*history.Log),
 	}
+}
+
+// History returns the recorded audit trail for key, oldest first,
+// or nil when nothing has been recorded yet. The mlop CLI reads it
+// to show what happened to a deployment, and the store persists it.
+func (r *Reconciler) History(key string) []history.Entry {
+	if log := r.histories[key]; log != nil {
+		return log.Entries()
+	}
+	return nil
+}
+
+// Histories returns a copy of every deployment's audit trail,
+// keyed by "namespace/name".
+func (r *Reconciler) Histories() map[string][]history.Entry {
+	out := make(map[string][]history.Entry, len(r.histories))
+	for k, log := range r.histories {
+		out[k] = log.Entries()
+	}
+	return out
+}
+
+// RestoreHistory installs an audit trail loaded from the state
+// file. A trail for a deployment that no longer exists is dropped;
+// anything else is kept (capped by the log), since generations only
+// move forward and a stored entry can never describe a future the
+// registry has not seen.
+func (r *Reconciler) RestoreHistory(key string, entries []history.Entry) {
+	if r.Registry.Get(key) == nil {
+		return
+	}
+	log := history.New()
+	log.Restore(entries)
+	r.histories[key] = log
 }
 
 // RolloutState returns the rollout state the reconciler tracks for
@@ -961,6 +1003,7 @@ func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
 	delete(r.rollouts, key)
 	delete(r.blueGreens, key)
 	delete(r.scalers, key)
+	delete(r.histories, key)
 	var actions []Action
 	ns, name, _ := strings.Cut(key, "/")
 	canaryKey := ns + "/" + name + "-canary"
@@ -1019,6 +1062,28 @@ func (r *Reconciler) scalerFor(key string) *autoscale.Scaler {
 	return s
 }
 
+// recordHistory appends one audit entry for key when the
+// generation, desired image/version, or phase changed since the
+// last recorded entry. Steady-state reconciles record nothing.
+func (r *Reconciler) recordHistory(key string, d api.ModelDeployment, phase api.Phase, msg string) {
+	log := r.histories[key]
+	if log == nil {
+		log = history.New()
+		r.histories[key] = log
+	}
+	if last, ok := log.Last(); ok && last.SameTransition(d.Generation, d.Spec.Model.Image, d.Spec.Model.Version, phase) {
+		return
+	}
+	log.Append(history.Entry{
+		Generation: d.Generation,
+		Image:      d.Spec.Model.Image,
+		Version:    d.Spec.Model.Version,
+		Phase:      phase,
+		Reason:     msg,
+		At:         r.now(),
+	})
+}
+
 // recordEvent records an operator event when an event recorder is
 // configured; a nil recorder is a no-op.
 func (r *Reconciler) recordEvent(key string, typ metrics.EventType, reason, message string) {
@@ -1050,6 +1115,14 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 	status.SetCondition(api.Condition{Type: "Progressing", Status: boolStatus(phase == api.PhaseProgressing), Reason: string(phase), Message: msg})
 	status.SetCondition(api.Condition{Type: "Available", Status: boolStatus(phase == api.PhaseAvailable), Reason: string(phase), Message: msg})
 	r.Registry.UpdateStatus(key, status)
+	// Audit trail: record the transition when the generation, the
+	// desired image/version, or the phase changed since the last
+	// entry. A no-op reconcile (same generation, same phase)
+	// records nothing, so the log is transitions, not noise. The
+	// image is the desired one — during a canary the history
+	// shows the new image while stable still serves the old one,
+	// which is exactly what an operator wants to see.
+	r.recordHistory(key, d, phase, msg)
 	if r.Metrics != nil {
 		r.Metrics.Inc(metrics.MetricReconcilesTotal, 1, "result", strings.ToLower(string(phase)))
 		r.Metrics.Set(metrics.MetricReadyReplicas, float64(ready), "deployment", key)
