@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
@@ -172,13 +173,39 @@ func cmdStatus(opts *options, args []string) int {
 	if len(d.Status.Conditions) > 0 {
 		fmt.Fprintln(opts.stdout, "conditions:")
 		for _, c := range d.Status.Conditions {
-			fmt.Fprintf(opts.stdout, "  %s: %s (%s) %s\n", c.Type, c.Status, c.Reason, c.Message)
+			fmt.Fprintf(opts.stdout, "  %s: %s (%s) %s — %s\n",
+				c.Type, c.Status, c.Reason, c.Message, formatConditionAge(c.LastTransitionTime, time.Now()))
 		}
 	}
 	if res.Requeue {
 		fmt.Fprintln(opts.stdout, "requeue:    yes — still converging")
 	}
 	return 0
+}
+
+// formatConditionAge renders how long a condition has held its
+// current status: "just now" under a minute, "5m ago", "2h ago",
+// "3d ago" beyond that. A zero timestamp (state written before
+// transition times existed, never reconciled since) reads as
+// "unknown", never as a date in year 1.
+func formatConditionAge(t time.Time, now time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	d := now.Sub(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // resolveKey turns a CLI name into a registry key: "name" means

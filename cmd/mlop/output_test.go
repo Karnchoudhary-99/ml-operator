@@ -125,3 +125,59 @@ func TestLogsJSON(t *testing.T) {
 		t.Fatalf("logs --tail 1 returned %d rows, want 1", len(rows))
 	}
 }
+
+func TestStatusConditionAges(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	manifest := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply exit %d", code)
+	}
+
+	// Text detail: every condition line carries an age ("just now"
+	// — the apply just stamped them) and the real reason.
+	code, out, _ := runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 {
+		t.Fatalf("status exit %d, out %q", code, out)
+	}
+	if !strings.Contains(out, "Ready: False (Provisioning)") || !strings.Contains(out, "just now") {
+		t.Fatalf("status detail missing condition age/reason:\n%s", out)
+	}
+
+	// JSON detail: the transition time is present and non-zero.
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp", "--json")
+	if code != 0 {
+		t.Fatalf("status --json exit %d, out %q", code, out)
+	}
+	var detail statusDetailView
+	if err := json.Unmarshal([]byte(out), &detail); err != nil {
+		t.Fatalf("status detail --json is not valid JSON: %v (%q)", err, out)
+	}
+	if len(detail.Conditions) == 0 {
+		t.Fatalf("status detail view has no conditions: %+v", detail)
+	}
+	for _, c := range detail.Conditions {
+		if c.LastTransitionTime.IsZero() {
+			t.Fatalf("condition %s has a zero transition time in JSON: %+v", c.Type, c)
+		}
+	}
+}
+
+func TestFormatConditionAge(t *testing.T) {
+	now := time.Date(2026, 11, 14, 21, 30, 0, 0, time.UTC)
+	cases := []struct {
+		at   time.Time
+		want string
+	}{
+		{time.Time{}, "unknown"},
+		{now.Add(-30 * time.Second), "just now"},
+		{now.Add(-5 * time.Minute), "5m ago"},
+		{now.Add(-2 * time.Hour), "2h ago"},
+		{now.Add(-3 * 24 * time.Hour), "3d ago"},
+		{now.Add(time.Minute), "just now"}, // clock skew: never a negative age
+	}
+	for _, tc := range cases {
+		if got := formatConditionAge(tc.at, now); got != tc.want {
+			t.Errorf("formatConditionAge(%v) = %q, want %q", tc.at, got, tc.want)
+		}
+	}
+}
