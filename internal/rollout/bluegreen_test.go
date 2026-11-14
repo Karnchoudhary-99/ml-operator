@@ -68,7 +68,7 @@ func TestBlueGreenNext(t *testing.T) {
 	// cutover already happened, the soak gate was the safety check.
 	s = NewBlueGreen(3)
 	s, _ = BlueGreenNext(s, pass, 0)
-	if s, d := BlueGreenNext(s, fail, 0); d != BlueGreenFold {
+	if _, d := BlueGreenNext(s, fail, 0); d != BlueGreenFold {
 		t.Fatalf("switched + failing gate: decision = %v, want fold", d)
 	}
 }
