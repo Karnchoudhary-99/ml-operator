@@ -36,6 +36,13 @@ sleep 2
 sleep 2
 "$MLOP" --state "$STATE" rollout status iris-mlp | grep -q "state:      promoted"
 
+step "diff previews the next change, and changes nothing"
+# v2 is live: diffing the v2 manifest is a no-op, and diffing the v1
+# manifest previews the way back — without applying either.
+"$MLOP" --state "$STATE" diff -f examples/iris-mlp-canary.yaml | grep -q "in sync"
+"$MLOP" --state "$STATE" diff -f examples/iris-mlp.yaml | grep -q "UpdateDeployment default/iris-mlp"
+"$MLOP" --state "$STATE" status iris-mlp | grep -q "registry.example.com/iris-mlp:v2"
+
 step "v2 is live, and the promotion is in the log"
 "$MLOP" --state "$STATE" status iris-mlp | grep -q "registry.example.com/iris-mlp:v2"
 "$MLOP" --state "$STATE" logs iris-mlp | grep -q "CanaryPromoted"

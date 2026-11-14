@@ -1,0 +1,13 @@
+{
+  "Name": "iris-mlp",
+  "Namespace": "default",
+  "Labels": {
+    "app.kubernetes.io/name": "iris-mlp",
+    "ml-operator/managed-by": "ml-operator",
+    "ml-operator/model": "iris-mlp"
+  },
+  "MinReplicas": 1,
+  "MaxReplicas": 4,
+  "TargetCPUUtilization": 70,
+  "TargetRequestsPerSecond": 100
+}
