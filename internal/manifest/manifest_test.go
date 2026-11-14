@@ -112,6 +112,43 @@ func TestParseCanaryGate(t *testing.T) {
 	}
 }
 
+func TestParseBlueGreenGate(t *testing.T) {
+	doc := "name: iris-mlp\nspec:\n  model:\n    image: img:v2\n  strategy: BlueGreen\n  blueGreen:\n    gate:\n      maxErrorRate: 0.02\n      maxP95LatencyMs: 250\n      minReadyRatio: 0.8\n"
+	d, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if d.Spec.Strategy != api.StrategyBlueGreen {
+		t.Fatalf("strategy = %q, want BlueGreen", d.Spec.Strategy)
+	}
+	if d.Spec.BlueGreen == nil || d.Spec.BlueGreen.Gate == nil {
+		t.Fatalf("gate not parsed: %+v", d.Spec.BlueGreen)
+	}
+	g := d.Spec.BlueGreen.Gate
+	if g.MaxErrorRate != 0.02 || g.MaxP95LatencyMs != 250 || g.MinReadyRatio != 0.8 {
+		t.Fatalf("gate = %+v", g)
+	}
+
+	// A BlueGreen strategy with no blueGreen block parses too: the
+	// gate defaults are ApplyDefaults' job, not the parser's.
+	d, err = Parse([]byte("name: x\nspec:\n  strategy: BlueGreen\n"))
+	if err != nil {
+		t.Fatalf("Parse bare BlueGreen: %v", err)
+	}
+	if d.Spec.BlueGreen != nil {
+		t.Fatalf("bare BlueGreen gained a spec: %+v", d.Spec.BlueGreen)
+	}
+
+	// An unknown key inside blueGreen fails loudly.
+	if _, err := Parse([]byte("name: x\nspec:\n  strategy: BlueGreen\n  blueGreen:\n    bogus: 1\n")); err == nil {
+		t.Fatal("expected an error for an unknown blueGreen key")
+	}
+	// A non-mapping gate fails loudly.
+	if _, err := Parse([]byte("name: x\nspec:\n  strategy: BlueGreen\n  blueGreen:\n    gate: 5\n")); err == nil {
+		t.Fatal("expected an error for a non-mapping blueGreen gate")
+	}
+}
+
 func TestParseMinimalYAML(t *testing.T) {
 	d, err := Parse([]byte("name: tiny\nspec:\n  model:\n    image: img:v1\n"))
 	if err != nil {
