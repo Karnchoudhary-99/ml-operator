@@ -1,0 +1,42 @@
+{
+  "Name": "iris-mlp",
+  "Namespace": "default",
+  "Replicas": 2,
+  "Labels": {
+    "app.kubernetes.io/name": "iris-mlp",
+    "ml-operator/canary": "false",
+    "ml-operator/managed-by": "ml-operator",
+    "ml-operator/model": "iris-mlp",
+    "ml-operator/version": "v1"
+  },
+  "Selector": {
+    "app.kubernetes.io/name": "iris-mlp",
+    "ml-operator/canary": "false",
+    "ml-operator/managed-by": "ml-operator"
+  },
+  "Canary": false,
+  "Container": {
+    "Name": "model",
+    "Image": "registry.example.com/iris-mlp:v1",
+    "Port": 8080,
+    "Env": [
+      {
+        "Name": "BATCH_SIZE",
+        "Value": "32"
+      },
+      {
+        "Name": "MODEL_PATH",
+        "Value": "/models/iris-mlp"
+      }
+    ],
+    "CPURequest": "500m",
+    "CPULimit": "1",
+    "MemoryRequest": "512Mi",
+    "MemoryLimit": "1Gi",
+    "ReadinessProbe": {
+      "Path": "/healthz",
+      "InitialDelaySeconds": 5,
+      "PeriodSeconds": 10
+    }
+  }
+}
