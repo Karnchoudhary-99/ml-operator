@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func int32Ptr(v int32) *int32 { return &v }
@@ -209,6 +211,93 @@ func TestStatusConditions(t *testing.T) {
 	}
 	if len(s.Conditions) != 1 {
 		t.Fatalf("expected 1 condition, got %d", len(s.Conditions))
+	}
+}
+
+// TestSetConditionTransitionTimes pins the Kubernetes rules: a new
+// condition is stamped, a same-status update keeps the old stamp
+// (only Reason/Message move), and a status flip re-stamps.
+func TestSetConditionTransitionTimes(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 21, 0, 0, 0, time.UTC)
+	t1 := t0.Add(10 * time.Minute)
+	t2 := t1.Add(5 * time.Minute)
+
+	s := ModelDeploymentStatus{}
+	s.SetConditionAt(Condition{Type: "Ready", Status: "False", Reason: "Provisioning", Message: "0/1 ready"}, t0)
+	got := s.ConditionFor("Ready")
+	if got == nil || !got.LastTransitionTime.Equal(t0) {
+		t.Fatalf("new condition not stamped with t0: %+v", got)
+	}
+
+	// Same status, new reason/message: the stamp must not move.
+	s.SetConditionAt(Condition{Type: "Ready", Status: "False", Reason: "Provisioning", Message: "still 0/1 ready"}, t1)
+	if got := s.ConditionFor("Ready"); !got.LastTransitionTime.Equal(t0) {
+		t.Fatalf("same-status update moved the stamp: %v, want %v", got.LastTransitionTime, t0)
+	} else if got.Message != "still 0/1 ready" {
+		t.Fatalf("same-status update did not refresh the message: %q", got.Message)
+	}
+
+	// Status flip: re-stamped with the flip time.
+	s.SetConditionAt(Condition{Type: "Ready", Status: "True", Reason: "ReplicasAvailable", Message: "1/1 ready"}, t2)
+	if got := s.ConditionFor("Ready"); !got.LastTransitionTime.Equal(t2) {
+		t.Fatalf("status flip not re-stamped: %v, want %v", got.LastTransitionTime, t2)
+	}
+	if len(s.Conditions) != 1 {
+		t.Fatalf("expected 1 condition, got %d", len(s.Conditions))
+	}
+}
+
+// TestSetConditionZeroTimestampStamped covers state files written
+// before transition times existed: a stored condition with a zero
+// stamp is stamped on first sight instead of keeping the zero value.
+func TestSetConditionZeroTimestampStamped(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 21, 0, 0, 0, time.UTC)
+	s := ModelDeploymentStatus{Conditions: []Condition{
+		{Type: "Ready", Status: "True", Reason: "ReplicasAvailable"},
+	}}
+	s.SetConditionAt(Condition{Type: "Ready", Status: "True", Reason: "ReplicasAvailable", Message: "1/1 ready"}, t0)
+	if got := s.ConditionFor("Ready"); got.LastTransitionTime.IsZero() {
+		t.Fatal("zero-stamp condition was not stamped on first sight")
+	} else if !got.LastTransitionTime.Equal(t0) {
+		t.Fatalf("zero-stamp condition stamped %v, want %v", got.LastTransitionTime, t0)
+	}
+}
+
+// TestConditionJSONRoundTrip pins the wire form: the transition time
+// survives a JSON round-trip (state file / `mlop status --json`).
+// A zero time is serialized as the RFC 3339 zero value, never
+// dropped: encoding/json omitempty does not omit struct values, so
+// the field is always present and an absent timestamp reads as
+// "unknown" rather than a missing key.
+func TestConditionJSONRoundTrip(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 21, 0, 0, 0, time.UTC)
+	s := ModelDeploymentStatus{}
+	s.SetConditionAt(Condition{Type: "Ready", Status: "True", Reason: "ReplicasAvailable"}, t0)
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	var back ModelDeploymentStatus
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	if got := back.ConditionFor("Ready"); got == nil || !got.LastTransitionTime.Equal(t0) {
+		t.Fatalf("transition time lost in JSON round-trip: %+v", got)
+	}
+
+	raw, err = json.Marshal(Condition{Type: "Ready", Status: "False"})
+	if err != nil {
+		t.Fatalf("marshal condition: %v", err)
+	}
+	if !strings.Contains(string(raw), `"lastTransitionTime":"0001-01-01T00:00:00Z"`) {
+		t.Fatalf("zero transition time should serialize as the RFC 3339 zero value: %s", raw)
+	}
+	var backCond Condition
+	if err := json.Unmarshal(raw, &backCond); err != nil {
+		t.Fatalf("unmarshal condition: %v", err)
+	}
+	if !backCond.LastTransitionTime.IsZero() {
+		t.Fatalf("zero transition time did not round-trip as zero: %v", backCond.LastTransitionTime)
 	}
 }
 
