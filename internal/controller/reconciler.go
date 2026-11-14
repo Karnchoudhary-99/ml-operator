@@ -274,7 +274,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		// change (new generation) triggers a fresh reconcile.
 		msg := "invalid spec: " + strings.Join(errorStrings(errs), "; ")
 		r.recordEvent(key, metrics.EventWarning, "InvalidSpec", msg)
-		r.updateStatus(key, d, api.PhaseFailed, 0, msg)
+		r.updateStatus(key, d, api.PhaseFailed, 0, "InvalidSpec", msg)
 		return Result{Phase: api.PhaseFailed, Message: msg}, nil
 	}
 
@@ -406,7 +406,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 			// caller should retry.
 			msg := fmt.Sprintf("apply %s %s failed: %v", a.Kind, a.Key, err)
 			r.recordEvent(key, metrics.EventWarning, "ApplyFailed", msg)
-			r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
+			r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), "ApplyFailed", msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 		}
 	}
@@ -438,7 +438,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 			serving = liveStable.Container.Image
 		}
 		msg := fmt.Sprintf("canary rollout aborted — stable still serves %s", serving)
-		r.updateStatus(key, d, api.PhaseDegraded, ready, msg)
+		r.updateStatus(key, d, api.PhaseDegraded, ready, "RolloutAborted", msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
 	}
 
@@ -451,7 +451,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 			serving = liveStable.Container.Image
 		}
 		msg := fmt.Sprintf("blue-green rollout aborted — stable still serves %s", serving)
-		r.updateStatus(key, d, api.PhaseDegraded, ready, msg)
+		r.updateStatus(key, d, api.PhaseDegraded, ready, "RolloutAborted", msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
 	}
 
@@ -475,7 +475,7 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		// Serving, but below the desired replica count.
 		phase = api.PhaseDegraded
 	}
-	r.updateStatus(key, d, phase, ready, msg)
+	r.updateStatus(key, d, phase, ready, reasonForPhase(phase, "Provisioning"), msg)
 	return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
 }
 
@@ -656,7 +656,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "aborted")
 		}
 		r.recordEvent(key, metrics.EventWarning, "RolloutAborted", msg)
-		r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+		r.updateStatus(key, d, api.PhaseDegraded, stableReady, "RolloutAborted", msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
 
 	case rollout.DecisionPromote:
@@ -674,7 +674,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			return r.Cluster.ApplyDeployment(promoted)
 		}); err != nil {
 			msg := fmt.Sprintf("promote: apply stable Deployment failed: %v", err)
-			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+			r.updateStatus(key, d, api.PhaseDegraded, stableReady, "ApplyFailed", msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 		}
 		actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: key,
@@ -697,7 +697,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "promoted")
 		}
 		r.recordEvent(key, metrics.EventNormal, "CanaryPromoted", msg)
-		r.updateStatus(key, d, phase, stableReady, msg)
+		r.updateStatus(key, d, phase, stableReady, reasonForPhase(phase, "Provisioning"), msg)
 		return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
 
 	case rollout.DecisionAdvance:
@@ -709,7 +709,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 			return r.Cluster.ApplyDeployment(c)
 		}); err != nil {
 			msg := fmt.Sprintf("canary weight step failed: %v", err)
-			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+			r.updateStatus(key, d, api.PhaseDegraded, stableReady, "ApplyFailed", msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 		}
 		actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: canaryKey,
@@ -732,7 +732,7 @@ func (r *Reconciler) reconcileCanary(key string, d api.ModelDeployment, rs rollo
 	if decision == rollout.DecisionAdvance {
 		msg = fmt.Sprintf("canary advanced to %d%% (step %d/%d)", next.CurrentWeight(), next.Step+1, len(next.Weights))
 	}
-	r.updateStatus(key, d, phase, stableReady, msg)
+	r.updateStatus(key, d, phase, stableReady, reasonForPhase(phase, "RolloutInProgress"), msg)
 	return Result{Actions: actions, Phase: phase, Requeue: true, Message: msg}, nil
 }
 
@@ -801,7 +801,7 @@ func (r *Reconciler) reconcileBlueGreen(key string, d api.ModelDeployment, bg ro
 			r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "aborted")
 		}
 		r.recordEvent(key, metrics.EventWarning, "BlueGreenAborted", msg)
-		r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+		r.updateStatus(key, d, api.PhaseDegraded, stableReady, "RolloutAborted", msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Message: msg}, nil
 
 	case rollout.BlueGreenSwitch:
@@ -814,14 +814,14 @@ func (r *Reconciler) reconcileBlueGreen(key string, d api.ModelDeployment, bg ro
 			return r.Cluster.ApplyService(render.GreenServiceFor(d))
 		}); err != nil {
 			msg := fmt.Sprintf("blue-green switch failed: %v", err)
-			r.updateStatus(key, d, api.PhaseDegraded, stableReady, msg)
+			r.updateStatus(key, d, api.PhaseDegraded, stableReady, "ApplyFailed", msg)
 			return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 		}
 		actions = append(actions, Action{Kind: ActionUpdateService, Key: key,
 			Reason: fmt.Sprintf("blue-green switched: service now serves %q", d.Spec.Model.Image)})
 		msg := fmt.Sprintf("blue-green switched to %s — service now serves the new version", d.Spec.Model.Version)
 		r.recordEvent(key, metrics.EventNormal, "BlueGreenSwitched", msg)
-		r.updateStatus(key, d, api.PhaseProgressing, stableReady, msg)
+		r.updateStatus(key, d, api.PhaseProgressing, stableReady, "BlueGreenSwitched", msg)
 		return Result{Actions: actions, Phase: api.PhaseProgressing, Requeue: true, Message: msg}, nil
 	}
 
@@ -838,7 +838,7 @@ func (r *Reconciler) reconcileBlueGreen(key string, d api.ModelDeployment, bg ro
 		gateSummary = "gate: " + strings.Join(ev.Reasons, "; ")
 	}
 	msg := fmt.Sprintf("blue-green soaking — %s", gateSummary)
-	r.updateStatus(key, d, phase, stableReady, msg)
+	r.updateStatus(key, d, phase, stableReady, reasonForPhase(phase, "RolloutInProgress"), msg)
 	return Result{Actions: actions, Phase: phase, Requeue: true, Message: msg}, nil
 }
 
@@ -858,7 +858,7 @@ func (r *Reconciler) foldBlueGreen(key string, d api.ModelDeployment, bg rollout
 		return r.Cluster.ApplyDeployment(promoted)
 	}); err != nil {
 		msg := fmt.Sprintf("blue-green fold: apply stable Deployment failed: %v", err)
-		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
+		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), "ApplyFailed", msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 	}
 	actions = append(actions, Action{Kind: ActionUpdateDeployment, Key: key,
@@ -867,7 +867,7 @@ func (r *Reconciler) foldBlueGreen(key string, d api.ModelDeployment, bg rollout
 		return r.Cluster.ApplyService(render.ServiceFor(d))
 	}); err != nil {
 		msg := fmt.Sprintf("blue-green fold: apply service failed: %v", err)
-		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), msg)
+		r.updateStatus(key, d, api.PhaseDegraded, r.Cluster.ReadyReplicas(key), "ApplyFailed", msg)
 		return Result{Actions: actions, Phase: api.PhaseDegraded, Requeue: true, Message: msg}, err
 	}
 	actions = append(actions, Action{Kind: ActionUpdateService, Key: key, Reason: "blue-green folded: service back to stable"})
@@ -897,7 +897,7 @@ func (r *Reconciler) foldBlueGreen(key string, d api.ModelDeployment, bg rollout
 		r.Metrics.Inc(metrics.MetricRolloutsTotal, 1, "result", "promoted")
 	}
 	r.recordEvent(key, metrics.EventNormal, "BlueGreenPromoted", msg)
-	r.updateStatus(key, d, phase, stableReady, msg)
+	r.updateStatus(key, d, phase, stableReady, reasonForPhase(phase, "Provisioning"), msg)
 	return Result{Actions: actions, Phase: phase, Requeue: phase != api.PhaseAvailable, Message: msg}, nil
 }
 
@@ -1191,11 +1191,16 @@ func (r *Reconciler) recordEvent(key string, typ metrics.EventType, reason, mess
 
 // updateStatus records the reconcile outcome in the registry. The
 // Ready / Progressing / Available conditions are rebuilt from the
-// phase every time, so a stale condition can never linger. It also
-// records the reconcile in the metrics collector: one counter
-// increment per outcome, and the ready/desired replica gauges for
-// this deployment.
-func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.Phase, ready int32, msg string) {
+// phase every time, so a stale condition can never linger — but they
+// are seeded from the stored status first, so LastTransitionTime
+// survives a no-op reconcile: a condition that did not change keeps
+// the stamp of when it last flipped, stamped with the reconciler's
+// clock (r.now(), controllable in tests). The reason is the
+// caller-supplied outcome (InvalidSpec, ApplyFailed, RolloutAborted,
+// ...) — never just the phase name. It also records the reconcile in
+// the metrics collector: one counter increment per outcome, and the
+// ready/desired replica gauges for this deployment.
+func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.Phase, ready int32, reason, msg string) {
 	status := api.ModelDeploymentStatus{
 		Phase:              phase,
 		ReadyReplicas:      ready,
@@ -1207,10 +1212,15 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 		// before calling here), never rebuilt from the phase.
 		PreviousImage:   d.Status.PreviousImage,
 		PreviousVersion: d.Status.PreviousVersion,
+		// The previous conditions seed the new status: without
+		// them every reconcile would re-stamp every condition
+		// and the transition times would be meaningless.
+		Conditions: d.Status.Conditions,
 	}
-	status.SetCondition(api.Condition{Type: "Ready", Status: boolStatus(phase == api.PhaseAvailable), Reason: string(phase), Message: msg})
-	status.SetCondition(api.Condition{Type: "Progressing", Status: boolStatus(phase == api.PhaseProgressing), Reason: string(phase), Message: msg})
-	status.SetCondition(api.Condition{Type: "Available", Status: boolStatus(phase == api.PhaseAvailable), Reason: string(phase), Message: msg})
+	now := r.now()
+	status.SetConditionAt(api.Condition{Type: "Ready", Status: boolStatus(phase == api.PhaseAvailable), Reason: reason, Message: msg}, now)
+	status.SetConditionAt(api.Condition{Type: "Progressing", Status: boolStatus(phase == api.PhaseProgressing), Reason: reason, Message: msg}, now)
+	status.SetConditionAt(api.Condition{Type: "Available", Status: boolStatus(phase == api.PhaseAvailable), Reason: reason, Message: msg}, now)
 	r.Registry.UpdateStatus(key, status)
 	// Audit trail: record the transition when the generation, the
 	// desired image/version, or the phase changed since the last
@@ -1226,6 +1236,21 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 		if d.Spec.Replicas != nil {
 			r.Metrics.Set(metrics.MetricDesiredReplicas, float64(*d.Spec.Replicas), "deployment", key)
 		}
+	}
+}
+
+// reasonForPhase maps a terminal reconcile phase to its condition
+// reason. Available means every replica is ready; Degraded means
+// serving below the desired count; Progressing keeps the caller's
+// reason (a rollout in flight, or plain provisioning).
+func reasonForPhase(phase api.Phase, progressingReason string) string {
+	switch phase {
+	case api.PhaseAvailable:
+		return "ReplicasAvailable"
+	case api.PhaseDegraded:
+		return "ReplicasNotReady"
+	default:
+		return progressingReason
 	}
 }
 
