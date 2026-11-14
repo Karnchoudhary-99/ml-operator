@@ -90,6 +90,70 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRoundTripBlueGreenState drives a blue-green rollout to the
+// switched state, saves, and checks the restored runtime keeps the
+// rollout where it was — the fold must happen on the next
+// reconcile, not restart the soak.
+func TestRoundTripBlueGreenState(t *testing.T) {
+	reg := registry.New()
+	reg.Register(dep())
+	cluster := controller.NewFakeCluster()
+	rec := controller.New(reg, cluster)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	cluster.SetReady("default/iris-mlp", 2)
+
+	// v2 under BlueGreen: create green, mark it ready, switch.
+	replicas := int32(2)
+	v2 := dep()
+	v2.Generation = 2
+	v2.Spec.Model = api.ModelSpec{Image: "registry.example.com/iris-mlp:v2", Framework: "onnx", Version: "v2"}
+	v2.Spec.Strategy = api.StrategyBlueGreen
+	v2.Spec.Replicas = &replicas
+	reg.Register(v2)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	cluster.SetReady("default/iris-mlp-green", 2)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	svc, _ := cluster.GetService("default/iris-mlp")
+	if svc.Selector["ml-operator/green"] != "true" {
+		t.Fatalf("setup: service selector = %v, want green=true (switched)", svc.Selector)
+	}
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := Save(path, From(reg, cluster, rec)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rt := loaded.Restore()
+	bs, ok := rt.Reconciler.BlueGreenState("default/iris-mlp")
+	if !ok || !bs.Switched || bs.Done || bs.Generation != 2 {
+		t.Fatalf("restored blue-green state = %+v/%v, want Switched generation 2", bs, ok)
+	}
+	// The restored runtime folds on the next reconcile: stable
+	// takes v2, green is deleted, no re-soak.
+	res, err := rt.Reconciler.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile after restore: %v", err)
+	}
+	if got, _ := rt.Cluster.GetDeployment("default/iris-mlp"); got.Container.Image != "registry.example.com/iris-mlp:v2" {
+		t.Fatalf("stable image = %s, want v2 after the restored fold", got.Container.Image)
+	}
+	if _, ok := rt.Cluster.GetDeployment("default/iris-mlp-green"); ok {
+		t.Fatal("green Deployment survived the restored fold")
+	}
+	if res.Phase != api.PhaseAvailable {
+		t.Fatalf("phase=%s, want Available", res.Phase)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	s, err := Load(filepath.Join(t.TempDir(), "nope", "state.json"))
 	if err != nil {
