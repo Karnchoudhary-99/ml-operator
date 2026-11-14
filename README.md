@@ -25,6 +25,7 @@ with the desired state.
 - [x] Diff preview + JSON output (`mlop diff`, `status`/`logs --json`)
 - [x] Metrics + events (Prometheus, Kubernetes events)
 - [x] Metrics HTTP endpoint (`--metrics-addr`, `/metrics` + `/healthz`)
+- [x] Deployment history audit trail (`mlop history`)
 - [x] CLI (`mlop`: apply, diff, status, logs, rollout) + demo
 - [ ] Self-review checklist, then public
 
@@ -143,6 +144,22 @@ mlop rollout status iris-mlp
 #   failures:   0 consecutive gate failures
 #   state:      in progress (phase Progressing)
 ```
+
+`mlop history` is the audit trail behind the events: one line per
+generation / phase / image transition, oldest first, so it reads
+like a timeline of what happened to the model. Steady-state
+reconciles record nothing — only real transitions appear — and the
+trail is capped at 50 entries per deployment, so the state file
+never grows without bound:
+
+```bash
+mlop history iris-mlp
+# 2026-11-14 20:15:03 gen 1 registry.example.com/iris-mlp:v1:v1 Available   2/2 replicas ready
+mlop history iris-mlp --json   # same trail, machine-readable
+```
+
+`examples/history-tour.sh` drives the trail end to end: v1,
+ready, canary v2, promote, rollback to v1 as generation 3.
 
 A blue-green rollout (`strategy: BlueGreen`,
 `examples/iris-mlp-bluegreen.yaml`) never splits traffic: v2

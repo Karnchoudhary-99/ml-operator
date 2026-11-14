@@ -65,6 +65,23 @@ decisions, aborts, invalid specs — not routine reconciles. A
 repeated identical event aggregates with a count (`(x3)`), the
 way Kubernetes aggregates events.
 
+## Reading the history
+
+```bash
+mlop history iris-mlp                  # oldest first, --tail N to limit
+mlop history iris-mlp --json           # machine-readable, same trail
+```
+
+While `logs` answers "what notable thing happened last?",
+`history` answers "what happened to this model, and when?" — one
+entry per generation / phase / image transition, in chronological
+order. A steady deployment that reconciles every few seconds
+adds no entries: only real transitions are recorded (first
+deploy, phase flip, version change, promotion, rollback, abort).
+The trail is capped at 50 entries per deployment and persists in
+the state file, so it survives across CLI invocations; deleting
+a deployment drops its trail with it.
+
 ## Metrics to watch
 
 The operator serves its Prometheus exposition on `--metrics-addr`
