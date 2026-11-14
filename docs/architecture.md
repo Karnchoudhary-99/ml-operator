@@ -66,8 +66,19 @@ cluster every time, and applies only the difference:
    is in flight — a first deploy or a replica-only change applies
    directly, with no green Deployment at all.
 5. **Apply.** Each action executes against the `Cluster`
-   interface. A failed apply is `Degraded` with requeue, not
-   `Failed` — the spec is fine, the cluster operation broke.
+   interface through `retryApply`: a transient cluster error is
+   retried with exponential backoff (3 attempts, 100ms base,
+   doubling per retry) instead of failing the reconcile on the
+   first blip. A recovered apply records one `ApplyRetried` event
+   and one `ml_operator_apply_retries_total{outcome=recovered}`
+   increment; a spent budget records `outcome=exhausted` and the
+   deployment goes `Degraded` with requeue, not `Failed` — the
+   spec is fine, the cluster operation broke. The rollout paths
+   (canary promote / weight step / abort, blue-green switch /
+   fold / abort) use the same helper, so no cluster write skips
+   the retry policy. Applies are idempotent by construction (the
+   same desired object applied twice is a no-op), so a retry
+   never duplicates an object or resets its readiness.
 6. **Gate (canary and blue-green).** The health gate reads the live
    canary's (or green Deployment's) readiness plus error rate, p95
    latency and the model-load probe from cluster metrics, against

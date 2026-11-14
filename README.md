@@ -374,10 +374,12 @@ recorder (bounded ring, identical events aggregate with a count,
 newest first). The reconciler records every reconcile outcome
 (`ml_operator_reconciles_total{result}`), rollout promotions and
 aborts (`ml_operator_rollouts_total{result}`), scaling decisions
-(`ml_operator_scale_events_total{direction=up|down|held}`), ready
+(`ml_operator_scale_events_total{direction=up|down|held}`), apply
+retries (`ml_operator_apply_retries_total{outcome=recovered|exhausted}`),
+ready
 and desired replica gauges per deployment, and events
 (`ScaledUp`, `ScaledDown`, `ScaleDownHeld`, `CanaryPromoted`,
-`RolloutAborted`, `InvalidSpec`, `ApplyFailed`). The demo prints
+`RolloutAborted`, `InvalidSpec`, `ApplyFailed`, `ApplyRetried`). The demo prints
 both at the end, and the operator serves the exposition live on
 `--metrics-addr` (default `:8080`, `/metrics` plus a `/healthz`
 liveness probe) — an empty exposition until the first reconcile
