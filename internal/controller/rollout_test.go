@@ -518,12 +518,18 @@ func TestReconcileCanaryModelLoadFailureAborts(t *testing.T) {
 	if got, _ := cluster.GetDeployment("default/iris-mlp"); got.Container.Image != "registry.example.com/iris-mlp:v1" {
 		t.Fatalf("stable image = %s, want v1 after abort", got.Container.Image)
 	}
-	// The next reconcile does not restart the rollout.
+	// The next reconcile does not restart the rollout — and it does
+	// not flip the phase back to Available either: the deployment
+	// still serves v1, not the desired v2, so it stays Degraded
+	// until a new generation arrives.
 	res, err = rec.Reconcile("default/iris-mlp")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(res.Actions) != 1 || res.Actions[0].Kind != ActionNoOp {
 		t.Fatalf("actions = %v, want a single NoOp (aborted rollout stays aborted)", res.Actions)
+	}
+	if res.Phase != api.PhaseDegraded {
+		t.Fatalf("phase after abort = %s, want Degraded (stable still serves v1)", res.Phase)
 	}
 }
