@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
@@ -217,5 +218,45 @@ func TestDefaultPathEnvOverride(t *testing.T) {
 	t.Setenv("MLOP_STATE", "/tmp/from-env/state.json")
 	if got := DefaultPath(); got != "/tmp/from-env/state.json" {
 		t.Fatalf("DefaultPath = %q, want the MLOP_STATE value", got)
+	}
+}
+
+// TestRoundTripConditionTransitionTimes pins that condition
+// transition times survive the state file: a deployment that became
+// Available at a known clock time still reports that exact stamp
+// (and reason) after save + load + restore.
+func TestRoundTripConditionTransitionTimes(t *testing.T) {
+	reg := registry.New()
+	reg.Register(dep())
+	cluster := controller.NewFakeCluster()
+	rec := controller.New(reg, cluster)
+	stamped := time.Date(2026, 11, 14, 21, 0, 0, 0, time.UTC)
+	rec.Now = func() time.Time { return stamped }
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	cluster.SetReady("default/iris-mlp", 2)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := Save(path, From(reg, cluster, rec)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	entry := loaded.Restore().Registry.Get("default/iris-mlp")
+	if entry == nil {
+		t.Fatalf("restored registry lost the deployment")
+	}
+	c := entry.Deployment.Status.ConditionFor("Ready")
+	if c == nil || c.Status != "True" || c.Reason != "ReplicasAvailable" {
+		t.Fatalf("restored Ready condition = %+v, want True/ReplicasAvailable", c)
+	}
+	if !c.LastTransitionTime.Equal(stamped) {
+		t.Fatalf("restored Ready stamped %v, want %v", c.LastTransitionTime, stamped)
 	}
 }
