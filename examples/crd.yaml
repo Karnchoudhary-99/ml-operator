@@ -172,6 +172,22 @@ spec:
                       type: integer
                       description: Per-pod request rate that triggers scaling. 0 disables RPS-based scaling.
                       minimum: 0
+                availability:
+                  type: object
+                  description: How the operator keeps the model serving through voluntary disruptions and spreads its pods across nodes. Absent means the operator defaults (anti-affinity on, maxSkew 1, minAvailable replicas-1). minAvailable must be < replicas — enforced by the operator, not the schema.
+                  properties:
+                    minAvailable:
+                      type: integer
+                      description: Pods that must stay available during a voluntary disruption. 0 means the default (replicas-1).
+                      minimum: 0
+                    antiAffinity:
+                      type: boolean
+                      description: Keep pods of one deployment off the same node. Absent means the default (true).
+                    maxSkew:
+                      type: integer
+                      description: 'Topology-spread maxSkew: the most pods any one node may hold above the least-loaded node. 0 means the default (1).'
+                      minimum: 0
+                      maximum: 10
                 env:
                   type: object
                   description: Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.
