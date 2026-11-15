@@ -265,3 +265,10 @@ scale-down stabilization window is in-memory only and restarts on
 every invocation — documented in `internal/store`. Deleting the
 state file resets the simulated world; nothing in it is a source
 of truth beyond the manifests.
+
+`internal/backup` snapshots that file into a versioned envelope
+(`mlop backup` / `mlop restore`): the raw state plus a SHA-256
+of the canonical payload, the mlop version and a creation
+timestamp. Restore verifies the checksum and refuses to clobber
+a non-empty state without `--force`, so a bad restore cannot
+silently drop a live world.
