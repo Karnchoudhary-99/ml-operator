@@ -16,22 +16,9 @@ import (
 // silently ignored.
 func Parse(data []byte) (api.ModelDeployment, error) {
 	var d api.ModelDeployment
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" {
-		return d, fmt.Errorf("manifest is empty")
-	}
-	var tree map[string]any
-	var err error
-	if strings.HasPrefix(trimmed, "{") {
-		err = json.Unmarshal(data, &tree)
-		if err != nil {
-			return d, fmt.Errorf("invalid JSON manifest: %w", err)
-		}
-	} else {
-		tree, err = parseYAMLSubset(data)
-		if err != nil {
-			return d, err
-		}
+	tree, err := ParseTree(data)
+	if err != nil {
+		return d, err
 	}
 	if err := checkKeys(tree, []string{"name", "namespace", "spec"}, ""); err != nil {
 		return d, err
@@ -40,6 +27,30 @@ func Parse(data []byte) (api.ModelDeployment, error) {
 		return d, err
 	}
 	return d, nil
+}
+
+// ParseTree parses a document — YAML (the documented subset) or JSON —
+// into a nested key tree. Other packages (operator configuration)
+// reuse it so the project has one YAML-subset parser, not two.
+func ParseTree(data []byte) (map[string]any, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil, fmt.Errorf("document is empty")
+	}
+	var tree map[string]any
+	var err error
+	if strings.HasPrefix(trimmed, "{") {
+		err = json.Unmarshal(data, &tree)
+		if err != nil {
+			return nil, fmt.Errorf("invalid JSON document: %w", err)
+		}
+	} else {
+		tree, err = parseYAMLSubset(data)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return tree, nil
 }
 
 // mapDeployment fills a ModelDeployment from the parsed key tree.
