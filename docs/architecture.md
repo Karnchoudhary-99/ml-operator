@@ -41,6 +41,12 @@ cluster every time, and applies only the difference:
    strategy, resources and the health path; `Validate` rejects the
    rest. An invalid spec never reaches the cluster — the deployment
    goes `Failed` with the validation errors in its status message.
+   `Lint` runs alongside it on the spec as written (before
+   defaults, so explicit choices stay visible) and warns about
+   risky-but-valid specs — untagged or `:latest` images, a canary
+   first step over 50%, a gate that can promote with pods unready.
+   `mlop validate` exposes both checks without touching state,
+   and `--strict` fails on warnings for CI gates.
 2. **Rollout state.** A Canary strategy keeps per-generation rollout
    state (weight ladder, step, consecutive failures); a BlueGreen
    strategy keeps its own (soaking/switched, consecutive failures).
