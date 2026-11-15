@@ -33,6 +33,7 @@ with the desired state.
 - [x] CRD + install manifests (`mlop crd` / `mlop install`, golden-tested)
 - [x] State backup + restore (`mlop backup` / `mlop restore`, checksummed)
 - [x] Wait for a rollout (`mlop watch`, text + JSON stream, `--all`)
+- [x] Batch apply (`mlop apply -d dir`, per-file errors + summary, `--dry-run`)
 - [ ] Self-review checklist, then public
 
 ## Quick start

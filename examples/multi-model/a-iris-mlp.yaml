@@ -1,0 +1,20 @@
+# One model in the multi-model batch: the iris classifier, two replicas.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 2
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
