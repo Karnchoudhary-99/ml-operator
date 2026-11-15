@@ -101,6 +101,7 @@ Usage:
 
 Commands:
   apply -f manifest.yaml [--dry-run]   validate + register + reconcile a deployment
+  apply -d dir [--dry-run]             apply every manifest in a directory, in filename order
   validate <name> | -f manifest.yaml [--json] [--strict]
                                      preflight check: errors fail, warnings listed (--strict fails on warnings too)
   diff <name> | diff -f manifest.yaml [--json]

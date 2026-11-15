@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
@@ -12,46 +14,38 @@ import (
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
 )
 
-// cmdApply implements `mlop apply -f manifest.yaml`: parse the
-// manifest, apply defaults, validate, register it (bumping the
-// generation when the spec changed), reconcile once against the
-// simulated cluster, and persist the new state. --dry-run stops
-// after validation and prints what would be applied.
+// cmdApply implements `mlop apply -f manifest.yaml` (or -d a
+// directory of manifests): parse the manifest, apply defaults,
+// validate, register it (bumping the generation when the spec
+// changed), reconcile once against the simulated cluster, and
+// persist the new state. --dry-run stops after validation and
+// prints what would be applied.
 func cmdApply(opts *options, args []string) int {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(opts.stderr)
 	fs.Usage = func() {
-		fmt.Fprint(opts.stderr, "Usage: mlop apply -f manifest.yaml [--dry-run]\n")
+		fmt.Fprint(opts.stderr, "Usage: mlop apply -f manifest.yaml [--dry-run]\n       mlop apply -d dir [--dry-run]\n")
 	}
 	file := fs.String("f", "", "manifest file (YAML or JSON)")
+	dir := fs.String("d", "", "directory of manifest files (YAML or JSON, applied in filename order)")
 	dryRun := fs.Bool("dry-run", false, "validate only, do not change state")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
-	if *file == "" {
-		fmt.Fprintln(opts.stderr, "mlop apply: -f manifest.yaml is required")
+	if *file != "" && *dir != "" {
+		fmt.Fprintln(opts.stderr, "mlop apply: -f and -d are mutually exclusive")
 		return 2
 	}
-	raw, err := os.ReadFile(*file)
-	if err != nil {
-		fmt.Fprintf(opts.stderr, "mlop apply: read %s: %v\n", *file, err)
-		return 1
+	if *dir != "" {
+		return cmdApplyDir(opts, *dir, *dryRun)
 	}
-	d, err := manifest.Parse(raw)
+	if *file == "" {
+		fmt.Fprintln(opts.stderr, "mlop apply: -f manifest.yaml is required (or -d dir)")
+		return 2
+	}
+	d, warnings, err := loadManifest(*file)
 	if err != nil {
 		fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
-		return 1
-	}
-	// Lint the spec as written, before defaults hide explicit
-	// choices (an explicit minReplicas 0 becomes 1). Warnings
-	// never block an apply — they are printed, not fatal.
-	warnings := api.Lint(&d)
-	api.ApplyDefaults(&d)
-	if errs := api.Validate(&d); len(errs) > 0 {
-		fmt.Fprintf(opts.stderr, "mlop apply: manifest is invalid:\n")
-		for _, e := range errs {
-			fmt.Fprintf(opts.stderr, "  - %s\n", e)
-		}
 		return 1
 	}
 	if *dryRun {
@@ -88,6 +82,108 @@ func cmdApply(opts *options, args []string) int {
 	}
 	if res.Message != "" {
 		fmt.Fprintf(opts.stdout, "  %s\n", res.Message)
+	}
+	return 0
+}
+
+// loadManifest reads, parses, lints and validates one manifest
+// file, applying defaults. It returns the deployment and its lint
+// warnings; the error carries the read, parse or validation failure
+// (validation failures list every bad field, like the old inline
+// code did). Warnings never block an apply — they are printed,
+// not fatal.
+func loadManifest(path string) (api.ModelDeployment, []string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return api.ModelDeployment{}, nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	d, err := manifest.Parse(raw)
+	if err != nil {
+		return api.ModelDeployment{}, nil, err
+	}
+	// Lint the spec as written, before defaults hide explicit
+	// choices (an explicit minReplicas 0 becomes 1).
+	warnings := api.Lint(&d)
+	api.ApplyDefaults(&d)
+	if errs := api.Validate(&d); len(errs) > 0 {
+		var b strings.Builder
+		b.WriteString("manifest is invalid:")
+		for _, e := range errs {
+			fmt.Fprintf(&b, "\n  - %s", e)
+		}
+		return api.ModelDeployment{}, warnings, fmt.Errorf("%s", b.String())
+	}
+	return d, warnings, nil
+}
+
+// cmdApplyDir implements `mlop apply -d dir`: apply every
+// .yaml/.yml/.json manifest in the directory in filename order,
+// loading state once and saving once at the end. Other files are
+// ignored (a README may live next to the manifests). --dry-run
+// validates every file and prints what would be applied, without
+// touching state.
+func cmdApplyDir(opts *options, dir string, dryRun bool) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Fprintf(opts.stderr, "mlop apply: read directory %s: %v\n", dir, err)
+		return 1
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".json") {
+			files = append(files, filepath.Join(dir, name))
+		}
+	}
+	if len(files) == 0 {
+		fmt.Fprintf(opts.stderr, "mlop apply: no manifest files (.yaml/.yml/.json) in %s\n", dir)
+		return 1
+	}
+
+	if dryRun {
+		for _, f := range files {
+			d, warnings, err := loadManifest(f)
+			if err != nil {
+				fmt.Fprintf(opts.stderr, "mlop apply: %s: %v\n", f, err)
+				return 1
+			}
+			fmt.Fprintf(opts.stdout, "valid: %s (image %s, %s, %d replica(s))\n",
+				d.Key(), d.Spec.Model.Image, d.Spec.Strategy, *d.Spec.Replicas)
+			for _, w := range warnings {
+				fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
+			}
+		}
+		return 0
+	}
+
+	st, err := store.Load(opts.statePath)
+	if err != nil {
+		fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
+		return 1
+	}
+	rt := st.Restore()
+	for _, f := range files {
+		d, warnings, err := loadManifest(f)
+		if err != nil {
+			fmt.Fprintf(opts.stderr, "mlop apply: %s: %v\n", f, err)
+			return 1
+		}
+		line, _, err := applyDeployment(rt, d)
+		if err != nil {
+			fmt.Fprintf(opts.stderr, "mlop apply: reconcile %s: %v\n", d.Key(), err)
+			return 1
+		}
+		fmt.Fprintln(opts.stdout, line)
+		for _, w := range warnings {
+			fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
+		}
+	}
+	if err := store.Save(opts.statePath, store.From(rt.Registry, rt.Cluster, rt.Reconciler)); err != nil {
+		fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
+		return 1
 	}
 	return 0
 }
