@@ -8,7 +8,7 @@
 //
 //	mlop [--state path] <command> [args]
 //
-// Commands: apply, diff, status, logs, history, rollout, ready, load, rollback, version.
+// Commands: apply, validate, diff, status, logs, history, rollout, ready, load, rollback, version.
 package main
 
 import (
@@ -54,6 +54,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch rest[0] {
 	case "apply":
 		return cmdApply(opts, rest[1:])
+	case "validate":
+		return cmdValidate(opts, rest[1:])
 	case "diff":
 		return cmdDiff(opts, rest[1:])
 	case "status":
@@ -89,6 +91,8 @@ Usage:
 
 Commands:
   apply -f manifest.yaml [--dry-run]   validate + register + reconcile a deployment
+  validate <name> | -f manifest.yaml [--json] [--strict]
+                                     preflight check: errors fail, warnings listed (--strict fails on warnings too)
   diff <name> | diff -f manifest.yaml [--json]
                                      show the apply plan without changing state
   status [name] [--json]             show deployments and their phases
