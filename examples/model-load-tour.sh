@@ -24,7 +24,15 @@ step() { echo; echo "=== $* ==="; }
 serve_v1() { # $1 = state file
 	"$MLOP" --state "$1" apply -f examples/iris-mlp.yaml >/dev/null
 	"$MLOP" --state "$1" ready iris-mlp --replicas 2 >/dev/null
-	"$MLOP" --state "$1" status iris-mlp | grep -q "phase:      Available"
+	# Capture first, don't pipe into grep -q: grep exits on the
+	# phase line while mlop still writes the lines after it, and
+	# under set -o pipefail that SIGPIPE kills the tour — flaky,
+	# seen twice during verification.
+	st="$("$MLOP" --state "$1" status iris-mlp)"
+	case "$st" in
+		*"phase:      Available"*) ;;
+		*) echo "serve_v1: expected an Available phase, got:" >&2; echo "$st" >&2; exit 1 ;;
+	esac
 	"$MLOP" --state "$1" apply -f examples/iris-mlp-canary.yaml >/dev/null
 	"$MLOP" --state "$1" ready iris-mlp --replicas 2 --canary >/dev/null
 }
