@@ -30,6 +30,7 @@ with the desired state.
 - [x] CLI (`mlop`: apply, diff, status, logs, rollout) + demo
 - [x] Status conditions with reasons + transition times (`mlop status` shows how long each condition has held)
 - [x] Operator configuration (config file + env + flags, periodic resync)
+- [x] CRD + install manifests (`mlop crd` / `mlop install`, golden-tested)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -203,6 +204,30 @@ examples/mlop-tour.sh
 # tour passed: v1 applied, v2 canaried and promoted, events logged.
 ```
 
+## Installing on a cluster
+
+The operator installs from generated manifests — never hand-edit
+them, generate them (`mlop crd` / `mlop install`, both read-only):
+
+```bash
+mlop crd | kubectl apply -f -        # CustomResourceDefinition (modeldeployments.ml.example.com)
+mlop install | kubectl apply -f -    # Namespace + RBAC + operator Deployment
+kubectl get mldep                     # Phase / Ready / Age columns
+kubectl apply -f examples/iris-mlp-k8s.yaml   # a ModelDeployment, Kubernetes shape
+```
+
+The CRD's openAPIV3 schema mirrors the operator's own validation
+(port 1–65535, canary weight 1–99, gate fractions 0–1), so the API
+server rejects a bad spec at admission. The install bundle is
+least-privilege RBAC (ModelDeployments + status, Deployments /
+Services / HPAs, read-only pods, event creation — no secrets, no
+nodes). The checked-in copies are `examples/crd.yaml` and
+`examples/install.yaml`, golden-tested against the generator. See
+`docs/architecture.md` (CRD and installation) and
+`docs/operations.md` (install runbook, including the honest limit
+that the installed operator still reconciles the simulated
+cluster until the controller-runtime phase).
+
 ## How it works
 
 1. You write a `ModelDeployment` manifest: model image, replicas,
@@ -217,8 +242,9 @@ examples/mlop-tour.sh
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`)
+- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`, `crd`, `install`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
+- `internal/crd` — CRD + install manifest generation (no external deps)
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
 - `internal/store` — JSON state file shared between mlop invocations
 - `internal/registry` — in-memory model registry + watch
