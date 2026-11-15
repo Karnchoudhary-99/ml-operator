@@ -243,6 +243,12 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.Autoscaling != nil && *a.Autoscaling != *b.Autoscaling {
 		return false
 	}
+	if (a.Availability == nil) != (b.Availability == nil) {
+		return false
+	}
+	if a.Availability != nil && !availabilityEqual(*a.Availability, *b.Availability) {
+		return false
+	}
 	if len(a.Env) != len(b.Env) {
 		return false
 	}
@@ -277,4 +283,25 @@ func gateEqual(a, b *api.GateSpec) bool {
 		return true
 	}
 	return *a == *b
+}
+
+// availabilityEqual compares two availability specs by value: nil
+// vs set differs, equal fields are equal whatever the pointers
+// are. The anti-affinity flag is a pointer, so a plain struct
+// comparison would compare addresses — a spec that survived a
+// JSON round-trip (state file) would never equal a freshly parsed
+// manifest with the same flag, and `mlop diff -f` would bump the
+// generation on every identical re-apply instead of reporting in
+// sync.
+func availabilityEqual(a, b api.AvailabilitySpec) bool {
+	if a.MinAvailable != b.MinAvailable || a.MaxSkew != b.MaxSkew {
+		return false
+	}
+	if (a.AntiAffinity == nil) != (b.AntiAffinity == nil) {
+		return false
+	}
+	if a.AntiAffinity != nil && *a.AntiAffinity != *b.AntiAffinity {
+		return false
+	}
+	return true
 }
