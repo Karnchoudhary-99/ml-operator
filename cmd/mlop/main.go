@@ -8,7 +8,7 @@
 //
 //	mlop [--state path] <command> [args]
 //
-// Commands: apply, validate, diff, status, logs, history, rollout, ready, load, rollback, crd, install, version.
+// Commands: apply, validate, diff, status, logs, history, rollout, ready, load, rollback, backup, restore, crd, install, version.
 package main
 
 import (
@@ -72,6 +72,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdLoad(opts, rest[1:])
 	case "rollback":
 		return cmdRollback(opts, rest[1:])
+	case "backup":
+		return cmdBackup(opts, rest[1:])
+	case "restore":
+		return cmdRestore(opts, rest[1:])
 	case "crd":
 		return cmdCRD(opts, rest[1:])
 	case "install":
@@ -106,6 +110,8 @@ Commands:
   ready <name> --replicas N [--canary] simulate pods passing the readiness gate
   load <name> [--canary] [--loading | --fail] simulate the model-load probe (loaded, loading, or failed)
   rollback <name>                      restore the previous image/version
+  backup <file> [--force]              snapshot all operator state to a checksummed backup file
+  restore <file> [--force]             verify a backup and restore state from it
   crd                                    print the ModelDeployment CustomResourceDefinition
   install [--namespace N] [--image I]    print the operator install bundle (Namespace, RBAC, Deployment)
   version                              print mlop version

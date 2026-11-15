@@ -135,6 +135,30 @@ The trail is capped at 50 entries per deployment and persists in
 the state file, so it survives across CLI invocations; deleting
 a deployment drops its trail with it.
 
+## Backing up and restoring state
+
+Everything the operator knows lives in the one state file, so a
+backup is a snapshot of that file — deployments, cluster,
+rollout progress, events and history together:
+
+```bash
+mlop backup ~/iris-backup.json            # snapshot the world
+mlop backup ~/iris-backup.json --force    # overwrite an existing backup file
+mlop restore ~/iris-backup.json           # verify + restore into the state file
+```
+
+A backup prints its deployment count, creation time and a short
+SHA-256 checksum, and the file itself records the mlop version
+that wrote it. Restore verifies the checksum before it touches
+the live state: a corrupted or hand-edited backup is refused
+with a checksum mismatch, and nothing is written. Restore also
+refuses to overwrite a state file that already holds deployments
+— use `--force` when the overwrite is intended, e.g. after a
+bad apply wiped the world. Deleting the state file first has the
+same effect without the flag. Try it end to end with
+`examples/backup-tour.sh` (backup → wipe → restore → tamper
+check).
+
 ## Metrics to watch
 
 The operator serves its Prometheus exposition on `--metrics-addr`

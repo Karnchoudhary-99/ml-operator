@@ -31,6 +31,7 @@ with the desired state.
 - [x] Status conditions with reasons + transition times (`mlop status` shows how long each condition has held)
 - [x] Operator configuration (config file + env + flags, periodic resync)
 - [x] CRD + install manifests (`mlop crd` / `mlop install`, golden-tested)
+- [x] State backup + restore (`mlop backup` / `mlop restore`, checksummed)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -183,6 +184,23 @@ mlop history iris-mlp --json   # same trail, machine-readable
 
 `examples/history-tour.sh` drives the trail end to end: v1,
 ready, canary v2, promote, rollback to v1 as generation 3.
+
+Everything the operator knows lives in the one state file, so
+`mlop backup` snapshots it — deployments, cluster, rollouts,
+events and history — into a checksummed file, and `mlop restore`
+verifies the checksum before writing it back. Restore refuses
+to overwrite a state that already holds deployments without
+`--force`, so a bad restore cannot silently drop a live world:
+
+```bash
+mlop backup ~/iris-backup.json
+# backed up 1 deployment(s) to /home/karn/iris-backup.json
+#   created: 2026-11-15 13:17:34 UTC  checksum: d16fd63727b9  size: 4580 bytes
+mlop restore ~/iris-backup.json   # after wiping the state file, the world comes back
+```
+
+`examples/backup-tour.sh` drives it end to end (backup → wipe
+→ restore → tamper check).
 
 A blue-green rollout (`strategy: BlueGreen`,
 `examples/iris-mlp-bluegreen.yaml`) never splits traffic: v2
