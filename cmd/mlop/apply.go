@@ -144,17 +144,26 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 	}
 
 	if dryRun {
+		// Validate every file and report all failures at once,
+		// so one bad manifest does not hide the next one.
+		valid, failed := 0, 0
 		for _, f := range files {
 			d, warnings, err := loadManifest(f)
 			if err != nil {
 				fmt.Fprintf(opts.stderr, "mlop apply: %s: %v\n", f, err)
-				return 1
+				failed++
+				continue
 			}
 			fmt.Fprintf(opts.stdout, "valid: %s (image %s, %s, %d replica(s))\n",
 				d.Key(), d.Spec.Model.Image, d.Spec.Strategy, *d.Spec.Replicas)
 			for _, w := range warnings {
 				fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
 			}
+			valid++
+		}
+		fmt.Fprintf(opts.stdout, "summary: %d valid, %d failed\n", valid, failed)
+		if failed > 0 {
+			return 1
 		}
 		return 0
 	}
