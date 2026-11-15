@@ -183,3 +183,23 @@ the world.
    never disable a check.
 3. After apply: `mlop status` + `mlop rollout status` until the
    phase is `Available` (or the rollout is promoted).
+
+## Operator configuration
+
+The operator's runtime settings come from four sources, weakest to
+strongest: built-in defaults, a config file (`--config`, YAML or
+JSON — `examples/operator-config.yaml` is a commented starting
+point), `ML_OPERATOR_*` environment variables, then CLI flags.
+Only a flag you explicitly set overrides the file or the
+environment. A bad value in any source fails startup with the
+offending key named — check the startup line, which prints the
+effective configuration (`namespace=… metrics=… resync=…s
+retries=…@…ms`), before assuming the operator is running with the
+settings you intended.
+
+The resync re-reconciles every registered deployment on
+`reconcileIntervalSeconds` (default 30s), so drift is caught without
+waiting for an event. A deployment the resync cannot reconcile is
+logged to stderr and retried on the next tick; it never kills the
+operator. Set the interval to `0` to disable the resync, and the
+metrics address to `""` to disable the metrics endpoint.
