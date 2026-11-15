@@ -47,6 +47,11 @@ func cmdWatch(opts *options, args []string) int {
 	// of hanging a script forever.
 	interval := time.Second
 	deadline := time.Now().Add(5 * time.Minute)
+	// Print only when the phase changes: a steady Progressing
+	// deployment would otherwise spam one line per second for
+	// minutes. The first snapshot always prints.
+	var lastPhase api.Phase
+	first := true
 	for {
 		res, err := rt.Reconciler.Reconcile(key)
 		if err != nil {
@@ -58,9 +63,13 @@ func cmdWatch(opts *options, args []string) int {
 			return 1
 		}
 		d := rt.Registry.Get(key).Deployment
-		fmt.Fprintf(opts.stdout, "%s %s: %s %d/%d ready\n",
-			time.Now().Format("15:04:05"), key, res.Phase,
-			d.Status.ReadyReplicas, desiredReplicas(d))
+		if first || res.Phase != lastPhase {
+			fmt.Fprintf(opts.stdout, "%s %s: %s %d/%d ready\n",
+				time.Now().Format("15:04:05"), key, res.Phase,
+				d.Status.ReadyReplicas, desiredReplicas(d))
+			first = false
+			lastPhase = res.Phase
+		}
 		switch res.Phase {
 		case api.PhaseAvailable:
 			return 0
