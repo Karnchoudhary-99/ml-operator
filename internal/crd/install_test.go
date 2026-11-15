@@ -1,6 +1,7 @@
 package crd
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -76,5 +77,22 @@ func TestInstallBundleDeterministic(t *testing.T) {
 	}
 	if a != b {
 		t.Error("InstallBundle is not deterministic across calls")
+	}
+}
+
+// TestGoldenInstallBundle pins the generated bundle to the
+// checked-in examples/install.yaml: regenerate it with
+// `mlop install > examples/install.yaml` after any change.
+func TestGoldenInstallBundle(t *testing.T) {
+	want, err := os.ReadFile("../../examples/install.yaml")
+	if err != nil {
+		t.Fatalf("read examples/install.yaml: %v", err)
+	}
+	got, err := InstallBundle("", "")
+	if err != nil {
+		t.Fatalf("InstallBundle: %v", err)
+	}
+	if got != string(want) {
+		t.Error("InstallBundle() differs from examples/install.yaml — regenerate with `mlop install > examples/install.yaml`")
 	}
 }

@@ -1,6 +1,7 @@
 package crd
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,23 @@ func TestCRDDeterministic(t *testing.T) {
 	}
 	if a != b {
 		t.Error("CRD() is not deterministic across calls")
+	}
+}
+
+// TestGoldenCRD pins the generated CRD to the checked-in
+// examples/crd.yaml: regenerate it with `mlop crd` after any
+// schema change, and commit the file alongside the code.
+func TestGoldenCRD(t *testing.T) {
+	want, err := os.ReadFile("../../examples/crd.yaml")
+	if err != nil {
+		t.Fatalf("read examples/crd.yaml: %v", err)
+	}
+	got, err := CRD()
+	if err != nil {
+		t.Fatalf("CRD(): %v", err)
+	}
+	if got != string(want) {
+		t.Error("CRD() differs from examples/crd.yaml — regenerate with `mlop crd > examples/crd.yaml`")
 	}
 }
 
