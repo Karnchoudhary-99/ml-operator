@@ -41,5 +41,17 @@
       "InitialDelaySeconds": 5,
       "PeriodSeconds": 10
     }
-  }
+  },
+  "AntiAffinity": true,
+  "TopologySpread": [
+    {
+      "MaxSkew": 1,
+      "TopologyKey": "kubernetes.io/hostname",
+      "WhenUnsatisfiable": "ScheduleAnyway",
+      "LabelSelector": {
+        "app.kubernetes.io/name": "iris-mlp",
+        "ml-operator/managed-by": "ml-operator"
+      }
+    }
+  ]
 }
