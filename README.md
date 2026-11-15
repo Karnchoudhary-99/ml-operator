@@ -29,6 +29,7 @@ with the desired state.
 - [x] Deployment history audit trail (`mlop history`)
 - [x] CLI (`mlop`: apply, diff, status, logs, rollout) + demo
 - [x] Status conditions with reasons + transition times (`mlop status` shows how long each condition has held)
+- [x] Operator configuration (config file + env + flags, periodic resync)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -408,6 +409,42 @@ both at the end, and the operator serves the exposition live on
 liveness probe) — an empty exposition until the first reconcile
 records a series is normal. The real Kubernetes event sink lands
 with the controller-runtime phase.
+
+## Operator configuration
+
+The operator takes its runtime configuration from four sources,
+weakest to strongest: built-in defaults, a config file
+(`--config`, YAML or JSON — see `examples/operator-config.yaml`),
+environment variables, then CLI flags.
+
+| Setting | File key | Env var | Flag | Default |
+| --- | --- | --- | --- | --- |
+| Namespace to watch | `namespace` | `ML_OPERATOR_NAMESPACE` | `--namespace` | `default` |
+| Metrics address | `metricsAddr` | `ML_OPERATOR_METRICS_ADDR` | `--metrics-addr` | `:8080` |
+| Resync interval (s) | `reconcileIntervalSeconds` | `ML_OPERATOR_RECONCILE_INTERVAL_SECONDS` | `--reconcile-interval` | `30` |
+| Cluster retry attempts | `applyMaxAttempts` | `ML_OPERATOR_APPLY_MAX_ATTEMPTS` | `--apply-max-attempts` | `3` |
+| Retry backoff (ms) | `applyRetryBackoffMs` | `ML_OPERATOR_APPLY_RETRY_BACKOFF_MS` | `--apply-retry-backoff` | `100` |
+
+Only a flag you explicitly set overrides the file or the
+environment — a flag left at its default never wins over a
+configured value. Unknown keys in the file are an error, and a bad
+value in any source (bad namespace, unparseable address, attempts
+below 1) fails startup with the offending key named. The startup
+line prints the effective configuration, so what the operator is
+actually running with is always visible.
+
+The resync re-reconciles every registered deployment on the
+configured interval, so drift is caught without waiting for an
+event; a deployment the resync cannot reconcile is logged and
+retried on the next tick, never fatal. Set the interval to `0` to
+disable the resync, and the metrics address to `""` to disable the
+metrics endpoint.
+
+```bash
+go run ./cmd/operator --config examples/operator-config.yaml
+# ml-operator 0.1.0 starting (namespace=ml-models metrics=:8080 resync=30s retries=3@100ms)
+ML_OPERATOR_NAMESPACE=staging go run ./cmd/operator --reconcile-interval 1m
+```
 
 ## License
 

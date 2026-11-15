@@ -1,0 +1,21 @@
+# Operator configuration (example)
+#
+# Copy to your own path and start the operator with:
+#   go run ./cmd/operator --config examples/operator-config.yaml
+#
+# Precedence, weakest to strongest: built-in defaults, this file,
+# ML_OPERATOR_* environment variables, then CLI flags. A bad value in
+# any source fails startup instead of running on a configuration
+# nobody asked for.
+
+namespace: ml-models
+metricsAddr: ":8080"
+
+# Re-reconcile every registered deployment this often, so drift is
+# caught without waiting for an event. 0 disables the resync.
+reconcileIntervalSeconds: 30
+
+# How many times one cluster operation is tried before the reconcile
+# gives up on it; the base delay between attempts (doubles each time).
+applyMaxAttempts: 3
+applyRetryBackoffMs: 100
