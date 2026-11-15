@@ -31,6 +31,29 @@ manifest ──► api ──► registry ──► controller ──► render 
 | `cmd/operator` | Operator entrypoint (`--demo` drives the fake cluster) |
 | `cmd/mlop` | CLI client (`apply`, `diff`, `status`, `logs`, …) |
 
+## Configuration and resync
+
+The operator process resolves its runtime configuration once, at
+startup: built-in defaults, then the `--config` file (YAML or JSON),
+then `ML_OPERATOR_*` environment variables, then the flags
+explicitly set on the command line (`internal/config`, precedence
+defaults < file < env < flags). Only a flag you explicitly set
+overrides the file or the environment, and a bad value in any
+source fails startup instead of running on a configuration nobody
+asked for. The startup line prints the effective configuration
+(namespace, metrics address, resync interval, retry budget), and
+the retry budget is applied to the reconciler before the first
+reconcile.
+
+Reconciles are also driven by a ticker, not only by events: the
+resync loop re-reconciles every registered deployment on
+`reconcileIntervalSeconds` (default 30s, `0` disables it), so drift
+is caught without waiting for a watch event. A deployment the
+resync cannot reconcile is logged to stderr and retried on the
+next tick — the failure is never fatal to the operator, and the
+steady-state resync of an in-sync deployment is a no-op that
+records no history.
+
 ## The reconcile loop
 
 `Reconciler.Reconcile` is level-triggered and idempotent — it
