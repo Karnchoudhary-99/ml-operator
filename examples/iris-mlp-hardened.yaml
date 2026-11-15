@@ -1,0 +1,26 @@
+# Minimal ModelDeployment manifest with availability hardening:
+# 3 replicas, minAvailable 2 (so one pod can always be drained),
+# anti-affinity on, maxSkew 1 (an even spread across nodes).
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 3
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  availability:
+    minAvailable: 2
+    antiAffinity: true
+    maxSkew: 1
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
