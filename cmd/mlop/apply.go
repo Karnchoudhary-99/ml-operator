@@ -41,6 +41,10 @@ func cmdApply(opts *options, args []string) int {
 		fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
 		return 1
 	}
+	// Lint the spec as written, before defaults hide explicit
+	// choices (an explicit minReplicas 0 becomes 1). Warnings
+	// never block an apply — they are printed, not fatal.
+	warnings := api.Lint(&d)
 	api.ApplyDefaults(&d)
 	if errs := api.Validate(&d); len(errs) > 0 {
 		fmt.Fprintf(opts.stderr, "mlop apply: manifest is invalid:\n")
@@ -52,6 +56,9 @@ func cmdApply(opts *options, args []string) int {
 	if *dryRun {
 		fmt.Fprintf(opts.stdout, "valid: %s (image %s, %s, %d replica(s))\n",
 			d.Key(), d.Spec.Model.Image, d.Spec.Strategy, *d.Spec.Replicas)
+		for _, w := range warnings {
+			fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
+		}
 		return 0
 	}
 
@@ -93,6 +100,9 @@ func cmdApply(opts *options, args []string) int {
 		fmt.Fprintf(opts.stdout, "applied %s (generation %d): phase=%s\n", key, d.Generation, res.Phase)
 	} else {
 		fmt.Fprintf(opts.stdout, "unchanged %s (generation %d): phase=%s\n", key, d.Generation, res.Phase)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
 	}
 	for _, a := range res.Actions {
 		fmt.Fprintf(opts.stdout, "  - %s %s (%s)\n", a.Kind, a.Key, a.Reason)
