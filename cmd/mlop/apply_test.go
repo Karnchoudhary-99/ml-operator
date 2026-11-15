@@ -82,6 +82,65 @@ func TestApplyDirHappyPath(t *testing.T) {
 // TestApplyDirDryRun validates a directory without touching state:
 // the valid files are listed, no state file is created, and a
 // real apply afterwards still starts at generation 1.
+// TestApplyDirErrors checks the batch failure modes: one bad file
+// does not abort the batch (the good file still applies, the run
+// exits 1 with the right summary), and two files defining the same
+// deployment key are rejected as a duplicate.
+func TestApplyDirErrors(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	dir := writeManifestDir(t, map[string]string{
+		"a-iris-mlp.yaml":    irisV1,
+		"b-broken.yaml":      "name: bad\nspec:\n  model:\n    image: \"\"\n",
+		"c-house-price.yaml": housePriceV1,
+	})
+	code, out, errOut := runCLIState(t, state, "apply", "-d", dir)
+	if code != 1 {
+		t.Fatalf("apply -d with a bad file exit %d, want 1 (out %q, err %q)", code, out, errOut)
+	}
+	// The good files on both sides of the bad one still applied.
+	for _, want := range []string{
+		"applied default/iris-mlp (generation 1)",
+		"applied default/house-price (generation 1)",
+		"summary: 2 applied, 0 unchanged, 1 failed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("apply -d out %q, want %q", out, want)
+		}
+	}
+	if !strings.Contains(errOut, "b-broken.yaml") || !strings.Contains(errOut, "must not be empty") {
+		t.Fatalf("apply -d err %q, want the broken file named with its validation error", errOut)
+	}
+	// And the good deployments really landed in state.
+	code, out, _ = runCLIState(t, state, "status")
+	if code != 0 || !strings.Contains(out, "iris-mlp") || !strings.Contains(out, "house-price") {
+		t.Fatalf("status after partial apply exit %d, out %q", code, out)
+	}
+
+	// Duplicates: two files, one key. The second is refused and
+	// the first still applies; exit 1.
+	state2 := filepath.Join(t.TempDir(), "state.json")
+	dup := writeManifestDir(t, map[string]string{
+		"a-iris-mlp.yaml": irisV1,
+		"b-iris-too.yaml": irisV1,
+	})
+	code, out, errOut = runCLIState(t, state2, "apply", "-d", dup)
+	if code != 1 || !strings.Contains(out, "summary: 1 applied, 0 unchanged, 1 failed") {
+		t.Fatalf("duplicate apply -d exit %d, out %q, err %q", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "duplicate deployment default/iris-mlp") || !strings.Contains(errOut, "a-iris-mlp.yaml") {
+		t.Fatalf("duplicate error %q, want the key and the first file named", errOut)
+	}
+
+	// The dry-run catches the same duplicate without touching state.
+	code, out, errOut = runCLIState(t, state2, "apply", "-d", dup, "--dry-run")
+	if code != 1 || !strings.Contains(out, "summary: 1 valid, 1 failed") {
+		t.Fatalf("duplicate dry-run exit %d, out %q, err %q", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "duplicate deployment") {
+		t.Fatalf("duplicate dry-run err %q", errOut)
+	}
+}
+
 func TestApplyDirDryRun(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 	dir := writeManifestDir(t, map[string]string{
