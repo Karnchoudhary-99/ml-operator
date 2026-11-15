@@ -119,9 +119,12 @@ func loadManifest(path string) (api.ModelDeployment, []string, error) {
 // cmdApplyDir implements `mlop apply -d dir`: apply every
 // .yaml/.yml/.json manifest in the directory in filename order,
 // loading state once and saving once at the end. Other files are
-// ignored (a README may live next to the manifests). --dry-run
-// validates every file and prints what would be applied, without
-// touching state.
+// ignored (a README may live next to the manifests). A deployment
+// key defined by two files in the same directory is rejected as a
+// duplicate — re-applying a key that already exists in state is
+// fine, that is a normal generation bump. --dry-run validates
+// every file and prints what would be applied, without touching
+// state.
 func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -146,6 +149,7 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 	if dryRun {
 		// Validate every file and report all failures at once,
 		// so one bad manifest does not hide the next one.
+		seen := make(map[string]string)
 		valid, failed := 0, 0
 		for _, f := range files {
 			d, warnings, err := loadManifest(f)
@@ -154,6 +158,12 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 				failed++
 				continue
 			}
+			if first, dup := seen[d.Key()]; dup {
+				fmt.Fprintf(opts.stderr, "mlop apply: %s: duplicate deployment %s (already defined by %s)\n", f, d.Key(), first)
+				failed++
+				continue
+			}
+			seen[d.Key()] = f
 			fmt.Fprintf(opts.stdout, "valid: %s (image %s, %s, %d replica(s))\n",
 				d.Key(), d.Spec.Model.Image, d.Spec.Strategy, *d.Spec.Replicas)
 			for _, w := range warnings {
@@ -178,6 +188,7 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 	// keep applying the rest, and save whatever landed. The
 	// summary at the end says how many applied and how many
 	// failed, and the exit code is 1 when anything failed.
+	seen := make(map[string]string)
 	applied, failed := 0, 0
 	for _, f := range files {
 		d, warnings, err := loadManifest(f)
@@ -186,6 +197,12 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 			failed++
 			continue
 		}
+		if first, dup := seen[d.Key()]; dup {
+			fmt.Fprintf(opts.stderr, "mlop apply: %s: duplicate deployment %s (already defined by %s)\n", f, d.Key(), first)
+			failed++
+			continue
+		}
+		seen[d.Key()] = f
 		line, _, err := applyDeployment(rt, d)
 		if err != nil {
 			fmt.Fprintf(opts.stderr, "mlop apply: reconcile %s: %v\n", d.Key(), err)
