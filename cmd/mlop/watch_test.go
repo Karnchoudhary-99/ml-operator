@@ -39,6 +39,43 @@ func TestWatchAvailableAndTimeout(t *testing.T) {
 	}
 }
 
+// TestWatchDegraded drives a canary to abort (three failed model
+// loads) so the deployment is Degraded, then checks watch exits 1
+// on the first tick instead of waiting for the timeout.
+func TestWatchDegraded(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	v1 := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", v1); code != 0 {
+		t.Fatalf("apply v1 failed")
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready v1 failed")
+	}
+	canary := writeManifest(t, irisCanary)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", canary); code != 0 {
+		t.Fatalf("canary apply failed")
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2", "--canary"); code != 0 {
+		t.Fatalf("ready canary failed")
+	}
+	// Three failed loads abort the rollout: the deployment is
+	// Degraded while stable still serves v1.
+	if code, _, _ := runCLIState(t, state, "load", "iris-mlp", "--canary", "--fail"); code != 0 {
+		t.Fatalf("load --fail failed")
+	}
+	if code, _, _ := runCLIState(t, state, "rollout", "status", "iris-mlp"); code != 0 {
+		t.Fatalf("rollout status (strike 2) failed")
+	}
+	if code, out, _ := runCLIState(t, state, "rollout", "status", "iris-mlp"); code != 0 || !strings.Contains(out, "state:      aborted") {
+		t.Fatalf("rollout status (strike 3) exit %d, out %q", code, out)
+	}
+
+	code, out, _ := runCLIState(t, state, "watch", "iris-mlp", "--interval", "10ms", "--timeout", "5s")
+	if code != 1 || !strings.Contains(out, "Degraded") {
+		t.Fatalf("watch degraded exit %d, out %q", code, out)
+	}
+}
+
 func TestWatchErrors(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 	// No deployments at all: --all errors instead of watching nothing.
