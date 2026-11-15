@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -76,14 +77,25 @@ func Write(statePath, backupPath, mlopVersion string, force bool) (*Summary, err
 		}
 	}
 
-	sum := sha256.Sum256(raw)
+	if st.Version == 0 {
+		st.Version = store.Version
+	}
+	// Canonicalise the payload before hashing it: the envelope is
+	// written indented, which re-formats embedded raw JSON, so the
+	// checksum must be over the compact form — and Read compacts
+	// the stored payload the same way before verifying.
+	canonical, err := json.Marshal(st)
+	if err != nil {
+		return nil, fmt.Errorf("encode state: %w", err)
+	}
+	sum := sha256.Sum256(canonical)
 	f := &File{
 		Version:     Version,
 		CreatedAt:   time.Now().UTC().Truncate(time.Second),
 		MlopVersion: mlopVersion,
 		Deployments: len(st.Deployments),
 		SHA256:      hex.EncodeToString(sum[:]),
-		State:       json.RawMessage(raw),
+		State:       json.RawMessage(canonical),
 	}
 	out, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
@@ -129,7 +141,15 @@ func Read(backupPath string) (*File, *Summary, error) {
 	if f.Version == 0 {
 		return nil, nil, fmt.Errorf("backup file %s has no format version: not a backup written by mlop", backupPath)
 	}
-	sum := sha256.Sum256(f.State)
+	// Verify the checksum over the canonical (compacted) payload:
+	// the envelope file is indented, which re-formats the embedded
+	// state, so the bytes on disk are not the bytes that were
+	// hashed at write time.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, f.State); err != nil {
+		return nil, nil, fmt.Errorf("backup file %s holds invalid state: %w", backupPath, err)
+	}
+	sum := sha256.Sum256(compact.Bytes())
 	if got := hex.EncodeToString(sum[:]); got != f.SHA256 {
 		return nil, nil, fmt.Errorf("backup file %s is corrupt: checksum mismatch (stored %s, computed %s)", backupPath, shortHash(f.SHA256), shortHash(got))
 	}
