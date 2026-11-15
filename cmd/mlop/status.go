@@ -24,23 +24,24 @@ type statusListView struct {
 
 // statusDetailView is the JSON form of `mlop status <name> --json`.
 type statusDetailView struct {
-	Name               string               `json:"name"`
-	Namespace          string               `json:"namespace"`
-	Generation         int64                `json:"generation"`
-	ObservedGeneration int64                `json:"observedGeneration"`
-	Phase              api.Phase            `json:"phase"`
-	Ready              int32                `json:"ready"`
-	Desired            int32                `json:"desired"`
-	Image              string               `json:"image"`
-	Framework          string               `json:"framework"`
-	Version            string               `json:"version"`
-	PreviousImage      string               `json:"previousImage,omitempty"`
-	PreviousVersion    string               `json:"previousVersion,omitempty"`
-	Strategy           api.RolloutStrategy  `json:"strategy"`
-	Autoscaling        *api.AutoscalingSpec `json:"autoscaling,omitempty"`
-	Message            string               `json:"message"`
-	Conditions         []api.Condition      `json:"conditions,omitempty"`
-	Requeue            bool                 `json:"requeue"`
+	Name               string                `json:"name"`
+	Namespace          string                `json:"namespace"`
+	Generation         int64                 `json:"generation"`
+	ObservedGeneration int64                 `json:"observedGeneration"`
+	Phase              api.Phase             `json:"phase"`
+	Ready              int32                 `json:"ready"`
+	Desired            int32                 `json:"desired"`
+	Image              string                `json:"image"`
+	Framework          string                `json:"framework"`
+	Version            string                `json:"version"`
+	PreviousImage      string                `json:"previousImage,omitempty"`
+	PreviousVersion    string                `json:"previousVersion,omitempty"`
+	Strategy           api.RolloutStrategy   `json:"strategy"`
+	Autoscaling        *api.AutoscalingSpec  `json:"autoscaling,omitempty"`
+	Availability       *api.AvailabilitySpec `json:"availability,omitempty"`
+	Message            string                `json:"message"`
+	Conditions         []api.Condition       `json:"conditions,omitempty"`
+	Requeue            bool                  `json:"requeue"`
 }
 
 // cmdStatus implements `mlop status [name] [--json]`: reconcile first (the
@@ -144,7 +145,8 @@ func cmdStatus(opts *options, args []string) int {
 			Image: d.Spec.Model.Image, Framework: d.Spec.Model.Framework, Version: d.Spec.Model.Version,
 			PreviousImage: d.Status.PreviousImage, PreviousVersion: d.Status.PreviousVersion,
 			Strategy: d.Spec.Strategy, Autoscaling: d.Spec.Autoscaling,
-			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
+			Availability: d.Spec.Availability,
+			Message:      d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
 		enc := json.NewEncoder(opts.stdout)
 		enc.SetIndent("", "  ")
@@ -168,6 +170,16 @@ func cmdStatus(opts *options, args []string) int {
 		fmt.Fprintf(opts.stdout, "autoscaling: min %d, max %d, cpu %d%%, rps %d\n",
 			d.Spec.Autoscaling.MinReplicas, d.Spec.Autoscaling.MaxReplicas,
 			d.Spec.Autoscaling.TargetCPUUtilization, d.Spec.Autoscaling.TargetRequestsPerSecond)
+	}
+	if d.Spec.Availability != nil {
+		// Effective values, not raw spec: minAvailable 0 means
+		// replicas-1 and maxSkew 0 means 1, and the line should
+		// say what the cluster actually gets.
+		fmt.Fprintf(opts.stdout, "availability: minAvailable %d/%d, anti-affinity %s, maxSkew %d\n",
+			d.Spec.Availability.EffectiveMinAvailable(desiredReplicas(d)),
+			desiredReplicas(d),
+			onOff(d.Spec.Availability.AntiAffinityEnabled()),
+			d.Spec.Availability.EffectiveMaxSkew())
 	}
 	fmt.Fprintf(opts.stdout, "message:    %s\n", d.Status.Message)
 	if len(d.Status.Conditions) > 0 {
@@ -229,4 +241,12 @@ func desiredReplicas(d api.ModelDeployment) int32 {
 		return api.DefaultReplicas
 	}
 	return *d.Spec.Replicas
+}
+
+// onOff renders a boolean as "on"/"off" for status lines.
+func onOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
 }

@@ -83,7 +83,7 @@ func TestApplyAndStatusFlow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("status detail exit %d", code)
 	}
-	for _, want := range []string{"generation: 1", "ready:      0/2 replicas", "registry.example.com/iris-mlp:v1", "requeue:"} {
+	for _, want := range []string{"generation: 1", "ready:      0/2 replicas", "registry.example.com/iris-mlp:v1", "requeue:", "availability: minAvailable 1/2, anti-affinity on, maxSkew 1"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status detail %q, want %q", out, want)
 		}

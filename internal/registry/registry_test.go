@@ -284,3 +284,55 @@ func TestSpecsEqualGates(t *testing.T) {
 		t.Fatal("present blueGreen block vs absent block should not be equal")
 	}
 }
+
+// TestSpecsEqualAvailability compares specs with availability
+// blocks: two separately-built specs with identical blocks are
+// equal (the anti-affinity flag is a pointer, so a plain struct
+// comparison would compare addresses and a spec that survived a
+// JSON round-trip would never equal a freshly parsed manifest).
+// A different minAvailable, maxSkew, or flag, or a nil vs set
+// block, differs — an availability-only change must bump the
+// generation, or `mlop apply` would call it unchanged and the PDB
+// would never update.
+func TestSpecsEqualAvailability(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Replicas: func() *int32 { v := int32(3); return &v }(),
+			Strategy: api.StrategyRolling,
+			Availability: &api.AvailabilitySpec{
+				MinAvailable: 2, AntiAffinity: boolPtr(true), MaxSkew: 1,
+			},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical availability specs should be equal")
+	}
+	b.Availability.MinAvailable = 1
+	if SpecsEqual(a, b) {
+		t.Fatal("different minAvailable should not be equal")
+	}
+	b = base()
+	b.Availability.MaxSkew = 2
+	if SpecsEqual(a, b) {
+		t.Fatal("different maxSkew should not be equal")
+	}
+	b = base()
+	b.Availability.AntiAffinity = boolPtr(false)
+	if SpecsEqual(a, b) {
+		t.Fatal("different antiAffinity flag should not be equal")
+	}
+	b = base()
+	b.Availability.AntiAffinity = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil antiAffinity flag vs set flag should not be equal")
+	}
+	b = base()
+	b.Availability = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil availability block vs set block should not be equal")
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 )
 
+func boolPtr(v bool) *bool { return &v }
+
 func dep() api.ModelDeployment {
 	d := api.ModelDeployment{
 		Name:       "iris-mlp",
@@ -285,5 +287,135 @@ func TestHPADiffReasons(t *testing.T) {
 	live.TargetCPUUtilization = 80
 	if reasons := HPADiffReasons(desired, live); len(reasons) != 2 {
 		t.Fatalf("HPA diff = %v, want 2 reasons (maxReplicas, targetCPU)", reasons)
+	}
+}
+
+// TestPDBFor pins the PDB render: a 3-replica deployment gets a
+// PDB with minAvailable 2 (the replicas-1 default) selecting the
+// model's base labels, and a single replica gets none — a PDB
+// that allows every disruption protects nothing.
+func TestPDBFor(t *testing.T) {
+	d := dep() // 3 replicas
+	pdb, ok := PDBFor(d)
+	if !ok {
+		t.Fatal("PDBFor with 3 replicas must return true")
+	}
+	if pdb.MinAvailable != 2 {
+		t.Fatalf("minAvailable = %d, want 2 (replicas-1 default)", pdb.MinAvailable)
+	}
+	if pdb.Name != "iris-mlp" || pdb.Namespace != "default" {
+		t.Fatalf("PDB identity = %s/%s, want default/iris-mlp", pdb.Namespace, pdb.Name)
+	}
+	if pdb.Selector["ml-operator/canary"] != "" || pdb.Selector["ml-operator/green"] != "" {
+		t.Fatalf("PDB selector must be the base selector (no canary/green labels): %v", pdb.Selector)
+	}
+	if pdb.Selector["app.kubernetes.io/name"] != "iris-mlp" {
+		t.Fatalf("PDB selector missing app label: %v", pdb.Selector)
+	}
+
+	d.Spec.Availability = &api.AvailabilitySpec{MinAvailable: 1, MaxSkew: 2}
+	pdb, ok = PDBFor(d)
+	if !ok || pdb.MinAvailable != 1 {
+		t.Fatalf("explicit minAvailable 1 rendered as %+v (ok=%v), want 1", pdb, ok)
+	}
+
+	single := dep()
+	one := int32(1)
+	single.Spec.Replicas = &one
+	api.ApplyDefaults(&single)
+	if _, ok := PDBFor(single); ok {
+		t.Fatal("PDBFor with 1 replica must return false")
+	}
+}
+
+// TestPDBDiffReasons pins the PDB diff: identical PDBs are a
+// no-op, a minAvailable change and a selector change each produce
+// one reason.
+func TestPDBDiffReasons(t *testing.T) {
+	d := dep()
+	desired, _ := PDBFor(d)
+	if reasons := PDBDiffReasons(desired, desired); len(reasons) != 0 {
+		t.Fatalf("identical PDBs differ: %v", reasons)
+	}
+	live := desired
+	live.MinAvailable = 1
+	if reasons := PDBDiffReasons(desired, live); len(reasons) != 1 {
+		t.Fatalf("PDB diff = %v, want 1 reason (minAvailable)", reasons)
+	}
+	live = desired
+	live.Selector = map[string]string{"app.kubernetes.io/name": "other"}
+	if reasons := PDBDiffReasons(desired, live); len(reasons) != 1 {
+		t.Fatalf("PDB diff = %v, want 1 reason (selector)", reasons)
+	}
+}
+
+// TestDeploymentHardening pins the pod-template hardening: a
+// multi-replica Deployment renders anti-affinity on and one
+// topology-spread constraint (maxSkew 1, hostname, ScheduleAnyway),
+// a single replica renders neither, and an explicit opt-out
+// removes both.
+func TestDeploymentHardening(t *testing.T) {
+	d := dep() // 3 replicas, defaults
+	got := DeploymentFor(d)
+	if !got.AntiAffinity {
+		t.Fatal("default Deployment must render anti-affinity on")
+	}
+	if len(got.TopologySpread) != 1 {
+		t.Fatalf("topology spread = %v, want 1 constraint", got.TopologySpread)
+	}
+	c := got.TopologySpread[0]
+	if c.MaxSkew != 1 || c.TopologyKey != "kubernetes.io/hostname" || c.WhenUnsatisfiable != "ScheduleAnyway" {
+		t.Fatalf("spread constraint wrong: %+v", c)
+	}
+	if c.LabelSelector["app.kubernetes.io/name"] != "iris-mlp" {
+		t.Fatalf("spread selector wrong: %v", c.LabelSelector)
+	}
+
+	one := int32(1)
+	single := dep()
+	single.Spec.Replicas = &one
+	api.ApplyDefaults(&single)
+	got = DeploymentFor(single)
+	if len(got.TopologySpread) != 0 {
+		t.Fatalf("single-replica Deployment must render no spread constraint, got %v", got.TopologySpread)
+	}
+	if !got.AntiAffinity {
+		t.Fatal("single-replica Deployment keeps anti-affinity (harmless, one pod has nothing to avoid)")
+	}
+
+	off := dep()
+	off.Spec.Availability = &api.AvailabilitySpec{AntiAffinity: boolPtr(false), MaxSkew: 2}
+	api.ApplyDefaults(&off)
+	got = DeploymentFor(off)
+	if got.AntiAffinity {
+		t.Fatal("explicit antiAffinity false must render off")
+	}
+	if got.TopologySpread[0].MaxSkew != 2 {
+		t.Fatalf("explicit maxSkew 2 rendered as %d", got.TopologySpread[0].MaxSkew)
+	}
+}
+
+// TestDeploymentDiffReasonsHardening pins the diff: an
+// anti-affinity flip and a spread change each surface as a reason,
+// so the reconciler updates the Deployment instead of reporting a
+// no-op.
+func TestDeploymentDiffReasonsHardening(t *testing.T) {
+	d := dep()
+	desired := DeploymentFor(d)
+	if reasons := DeploymentDiffReasons(desired, desired); len(reasons) != 0 {
+		t.Fatalf("identical Deployments differ: %v", reasons)
+	}
+	live := desired
+	live.AntiAffinity = false
+	if reasons := DeploymentDiffReasons(desired, live); len(reasons) != 1 {
+		t.Fatalf("Deployment diff = %v, want 1 reason (antiAffinity)", reasons)
+	}
+	live = desired
+	// Copy the slice: a struct copy shares the backing array, so
+	// mutating live.TopologySpread[0] would mutate desired too.
+	live.TopologySpread = append([]TopologySpreadConstraint(nil), desired.TopologySpread...)
+	live.TopologySpread[0].MaxSkew = 2
+	if reasons := DeploymentDiffReasons(desired, live); len(reasons) != 1 {
+		t.Fatalf("Deployment diff = %v, want 1 reason (topology spread)", reasons)
 	}
 }

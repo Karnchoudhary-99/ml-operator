@@ -43,6 +43,8 @@ func TestSpecSchemaMirrorsValidation(t *testing.T) {
 		{"canary.gate.minReadyRatio", findProp(findProp(findProp(spec, "canary"), "gate"), "minReadyRatio"), 0, 1, true},
 		{"autoscaling.maxReplicas", findProp(findProp(spec, "autoscaling"), "maxReplicas"), 1, 0, false},
 		{"autoscaling.targetCPUUtilization", findProp(findProp(spec, "autoscaling"), "targetCPUUtilization"), 0, 100, true},
+		{"availability.minAvailable", findProp(findProp(spec, "availability"), "minAvailable"), 0, 0, false},
+		{"availability.maxSkew", findProp(findProp(spec, "availability"), "maxSkew"), 0, 10, true},
 	}
 	for _, c := range rangeCases {
 		if c.s == nil {
@@ -80,6 +82,20 @@ func TestSpecSchemaMirrorsValidation(t *testing.T) {
 	env := findProp(spec, "env")
 	if env.additionalProperties == nil || env.additionalProperties.typ != "string" {
 		t.Error("spec.env must allow arbitrary string values (additionalProperties: type string)")
+	}
+
+	// Availability: the block exists, anti-affinity is a boolean,
+	// and nothing in it is required (absent means the defaults).
+	avail := findProp(spec, "availability")
+	if avail == nil {
+		t.Fatal("spec.availability missing from schema")
+	}
+	anti := findProp(avail, "antiAffinity")
+	if anti == nil || anti.typ != "boolean" {
+		t.Error("spec.availability.antiAffinity missing or not a boolean")
+	}
+	if len(avail.required) != 0 {
+		t.Errorf("availability required = %v, want none (absent means defaults)", avail.required)
 	}
 }
 

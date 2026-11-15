@@ -15,9 +15,11 @@ import (
 // reconcile (available) -> new image -> reconcile (rolling update)
 // -> canary rollout to a third version (weight steps, health gate,
 // model-load probe, promotion) -> blue-green rollout to a fourth
-// version (green soak, Service cutover, fold) -> autoscaling. It
-// prints every action and phase, so the reconcile loop is visible
-// without a real cluster.
+// version (green soak, Service cutover, fold) -> autoscaling.
+// Hardening rides along: the first reconcile creates the PDB
+// (2 replicas, minAvailable 1), the scale-up updates it, and the
+// scale-down to one replica deletes it. It prints every action and
+// phase, so the reconcile loop is visible without a real cluster.
 func runDemo(w io.Writer) error {
 	reg := registry.New()
 	cluster := controller.NewFakeCluster()

@@ -37,6 +37,7 @@ func Validate(d *ModelDeployment) []error {
 	errs = append(errs, validateResources(spec.Resources)...)
 	errs = append(errs, validateStrategy(spec)...)
 	errs = append(errs, validateAutoscaling(spec.Autoscaling)...)
+	errs = append(errs, validateAvailability(spec)...)
 	errs = append(errs, validateEnv(spec.Env)...)
 	errs = append(errs, validateHealth(spec.Health)...)
 
@@ -164,6 +165,33 @@ func validateAutoscaling(a *AutoscalingSpec) []error {
 	}
 	if a.TargetCPUUtilization == 0 && a.TargetRequestsPerSecond == 0 {
 		errs = append(errs, fmt.Errorf("spec.autoscaling needs at least one target (targetCPUUtilization or targetRequestsPerSecond)"))
+	}
+	return errs
+}
+
+// validateAvailability checks the availability block. A nil block
+// is valid — ApplyDefaults fills it in before the spec is ever
+// rendered. minAvailable must stay below the replica count: a PDB
+// that demands every replica available blocks every voluntary
+// eviction, including the node drain the PDB exists to survive.
+func validateAvailability(spec ModelDeploymentSpec) []error {
+	a := spec.Availability
+	if a == nil {
+		return nil
+	}
+	var errs []error
+	replicas := int32(1)
+	if spec.Replicas != nil {
+		replicas = *spec.Replicas
+	}
+	if a.MinAvailable < 0 {
+		errs = append(errs, fmt.Errorf("spec.availability.minAvailable must be >= 0, got %d", a.MinAvailable))
+	}
+	if a.MinAvailable > 0 && a.MinAvailable >= replicas {
+		errs = append(errs, fmt.Errorf("spec.availability.minAvailable (%d) must be < replicas (%d): minAvailable == replicas blocks every voluntary eviction", a.MinAvailable, replicas))
+	}
+	if a.MaxSkew < 0 || a.MaxSkew > 10 {
+		errs = append(errs, fmt.Errorf("spec.availability.maxSkew must be between 0 and 10, got %d", a.MaxSkew))
 	}
 	return errs
 }

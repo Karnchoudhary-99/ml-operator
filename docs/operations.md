@@ -171,6 +171,43 @@ README can live next to the manifests. `examples/batch-tour.sh`
 drives it end to end: dry-run, apply, re-apply, then
 `mlop watch --all` for both models.
 
+## Deployment hardening
+
+A model with more than one replica is hardened by default — no
+manifest block needed:
+
+- **PodDisruptionBudget.** The operator renders a PDB with
+  `minAvailable` one below the replica count, so a node drain can
+  always take one pod but never the whole model. It selects the
+  model's base labels, so canary and green pods count toward the
+  available count while they serve. A single replica renders no
+  PDB — a budget that allows every disruption protects nothing.
+- **Pod anti-affinity + topology spread.** Pods of one deployment
+  prefer different nodes (hostname anti-affinity, `ScheduleAnyway`
+  so a tight cluster still schedules), with a maxSkew of 1: at most
+  one more pod on the busiest node than on the quietest.
+
+Override the defaults in the manifest (`examples/iris-mlp-hardened.yaml`):
+
+```yaml
+spec:
+  replicas: 3
+  availability:
+    minAvailable: 2
+    antiAffinity: true
+    maxSkew: 1
+```
+
+`minAvailable` must stay below the replica count — equal to it
+would block every voluntary eviction, so `apply` rejects it.
+`mlop status <name>` shows the effective values
+(`availability: minAvailable 2/3, anti-affinity on, maxSkew 1`),
+and `mlop diff` previews a change before it applies. Scaling
+moves the PDB with the replica count: scale up updates
+minAvailable, scale down to one replica deletes the PDB, and
+deleting the deployment removes it with the rest of its objects.
+`examples/hardening-tour.sh` drives all of it end to end.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a
@@ -283,12 +320,15 @@ the world.
 1. `mlop validate -f <manifest>` — errors fail, warnings are listed;
    `--strict` fails on warnings too. In CI, gate the apply on it.
 2. `mlop diff -f <manifest>` — read the plan, not just the phase.
-2. For a canary or blue-green rollout: is the gate right for this
+3. For a canary or blue-green rollout: is the gate right for this
    model? A latency-sensitive model wants a tighter gate
    (`canary.gate` / `blueGreen.gate`, `maxP95LatencyMs`); a noisy
    one a looser `maxErrorRate`. Thresholds tune the gate, they
    never disable a check.
-3. After apply: `mlop status` + `mlop rollout status` until the
+4. For a multi-replica model: is the availability block right?
+   `minAvailable` must be below the replica count, and turning
+   anti-affinity off puts every pod at the mercy of one node.
+5. After apply: `mlop status` + `mlop rollout status` until the
    phase is `Available` (or the rollout is promoted).
 
 ## Operator configuration

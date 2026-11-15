@@ -34,6 +34,7 @@ with the desired state.
 - [x] State backup + restore (`mlop backup` / `mlop restore`, checksummed)
 - [x] Wait for a rollout (`mlop watch`, text + JSON stream, `--all`)
 - [x] Batch apply (`mlop apply -d dir`, per-file errors + summary, `--dry-run`)
+- [x] Deployment hardening (PodDisruptionBudget, pod anti-affinity, topology spread)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -65,6 +66,7 @@ mlop apply -f examples/iris-mlp.yaml
 # applied default/iris-mlp (generation 1): phase=Progressing
 #   - CreateDeployment default/iris-mlp (deployment does not exist)
 #   - CreateService default/iris-mlp (service does not exist)
+#   - CreatePDB default/iris-mlp (pod disruption budget does not exist)
 
 # Re-applying the same manifest is a no-op; a changed spec bumps
 # the generation and rolls the model out.
@@ -290,11 +292,13 @@ spec:
 `ApplyDefaults` fills in: 1 replica, port 8080, `RollingUpdate`
 strategy, CPU `500m`/`1`, memory `512Mi`/`1Gi`, readiness on
 `/healthz` (or `/v2/health/ready` for Triton), 5s initial delay,
-10s probe period. `Validate` is strict and returns every problem at
+10s probe period, and the availability defaults (anti-affinity on,
+maxSkew 1, minAvailable replicas-1). `Validate` is strict and returns every problem at
 once: DNS-1123 names, image required, port 1–65535, resource
 quantities (`500m`, `2`, `512Mi`, `1Gi`, `1G`) with limit ≥ request,
 strategy one of `Recreate` / `RollingUpdate` / `Canary` (canary needs
-`weight` 1–99), autoscaling `min ≤ max` with at least one target, env
+`weight` 1–99), autoscaling `min ≤ max` with at least one target, availability
+`minAvailable` below the replica count and `maxSkew` 0–10, env
 keys matching `[A-Za-z_][A-Za-z0-9_]*`, health path starting with `/`.
 
 The registry (`internal/registry`) is thread-safe and revisioned:
@@ -314,7 +318,11 @@ selector labels (the version label lives on pod templates only, so a
 version bump never changes the selector), deterministic sorted env,
 image / resources / port / readiness probe from the spec, and a
 ClusterIP Service on port 80 forwarding to the container port.
-`DeploymentDiffReasons` / `ServiceDiffReasons` name exactly which
+Multi-replica Deployments also render pod anti-affinity and a
+topology-spread constraint (maxSkew 1, hostname, `ScheduleAnyway`),
+and the operator renders a PodDisruptionBudget with minAvailable
+replicas-1 — a single replica renders no PDB, and scaling moves it
+with the replica count. `DeploymentDiffReasons` / `ServiceDiffReasons` / `PDBDiffReasons` name exactly which
 managed fields drifted, so the reconciler applies only what changed.
 
 The reconciler (`internal/controller`) is level-triggered and
@@ -328,8 +336,8 @@ side by side. Status moves `Pending` → `Progressing` → `Available`
 `Progressing` / `Available` conditions rebuilt every reconcile; each
 condition carries a real reason and a `lastTransitionTime`, so
 `mlop status` shows how long it has held (`5m ago`, `2h ago`) — a
-deployment that leaves the registry has its Deployment, canary and
-Service garbage-collected. The `Cluster` interface is the only
+deployment that leaves the registry has its Deployment, canary,
+green, Service, HPA and PDB garbage-collected. The `Cluster` interface is the only
 cluster surface the reconciler needs, and `FakeCluster` implements
 it in memory for tests and the demo loop (new Deployments start at
 0 ready replicas until `SetReady` simulates pods passing the gate).

@@ -43,8 +43,8 @@ func TestReconcileCreateThenAvailable(t *testing.T) {
 	if res.Phase != api.PhaseProgressing || !res.Requeue {
 		t.Fatalf("after create: phase=%s requeue=%v, want Progressing/true", res.Phase, res.Requeue)
 	}
-	if len(res.Actions) != 2 { // CreateDeployment + CreateService
-		t.Fatalf("actions = %v, want 2 (create deployment + service)", res.Actions)
+	if len(res.Actions) != 3 { // CreateDeployment + CreateService + CreatePDB
+		t.Fatalf("actions = %v, want 3 (create deployment + service + PDB)", res.Actions)
 	}
 	if res.Actions[0].Kind != ActionCreateDeployment || res.Actions[1].Kind != ActionCreateService {
 		t.Fatalf("action order wrong: %v", res.Actions)
@@ -180,8 +180,10 @@ func TestReconcileRecreateDeletesFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(res.Actions) != 1 || res.Actions[0].Kind != ActionUpdateDeployment {
-		t.Fatalf("scale under Recreate: actions = %v, want a single UpdateDeployment", res.Actions)
+	// A scale-up changes the Deployment and the PDB (minAvailable
+	// is replicas-1 by default, so 2 -> 4 replicas moves it 1 -> 3).
+	if len(res.Actions) != 2 || res.Actions[0].Kind != ActionUpdateDeployment || res.Actions[1].Kind != ActionUpdatePDB {
+		t.Fatalf("scale under Recreate: actions = %v, want [UpdateDeployment UpdatePDB]", res.Actions)
 	}
 }
 
@@ -196,8 +198,8 @@ func TestReconcileCanary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(res.Actions) != 3 { // stable + canary + service
-		t.Fatalf("actions = %v, want 3", res.Actions)
+	if len(res.Actions) != 4 { // stable + canary + service + PDB
+		t.Fatalf("actions = %v, want 4", res.Actions)
 	}
 	canary, ok := cluster.GetDeployment("default/iris-mlp-canary")
 	if !ok {
@@ -269,8 +271,8 @@ func TestReconcileDeletedGarbageCollects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(res.Actions) != 3 { // stable + canary + service deletes
-		t.Fatalf("actions = %v, want 3 deletes", res.Actions)
+	if len(res.Actions) != 4 { // stable + canary + service + PDB deletes
+		t.Fatalf("actions = %v, want 4 deletes", res.Actions)
 	}
 	if cluster.DeploymentCount() != 0 || cluster.ServiceCount() != 0 {
 		t.Fatal("cluster objects were not garbage-collected")

@@ -32,6 +32,10 @@ spec:
     minReplicas: 1
     maxReplicas: 5
     targetCPUUtilization: 70
+  availability:
+    minAvailable: 2
+    antiAffinity: false
+    maxSkew: 2
   env:
     LOG_LEVEL: info
     MODEL_CACHE: /models
@@ -69,6 +73,12 @@ func TestParseFullYAML(t *testing.T) {
 	}
 	if d.Spec.Autoscaling == nil || d.Spec.Autoscaling.MaxReplicas != 5 || d.Spec.Autoscaling.TargetCPUUtilization != 70 {
 		t.Errorf("autoscaling = %+v", d.Spec.Autoscaling)
+	}
+	if d.Spec.Availability == nil || d.Spec.Availability.MinAvailable != 2 || d.Spec.Availability.MaxSkew != 2 {
+		t.Errorf("availability = %+v", d.Spec.Availability)
+	}
+	if d.Spec.Availability == nil || d.Spec.Availability.AntiAffinity == nil || *d.Spec.Availability.AntiAffinity {
+		t.Errorf("availability antiAffinity = %+v, want explicit false", d.Spec.Availability)
 	}
 	if d.Spec.Env["LOG_LEVEL"] != "info" || d.Spec.Env["MODEL_CACHE"] != "/models" {
 		t.Errorf("env = %v", d.Spec.Env)
@@ -163,6 +173,28 @@ func TestParseMinimalYAML(t *testing.T) {
 	}
 }
 
+// TestParseAvailability pins the availability block: a partial
+// block parses (the rest is ApplyDefaults' job), and the JSON form
+// carries the boolean through.
+func TestParseAvailability(t *testing.T) {
+	d, err := Parse([]byte("name: x\nspec:\n  availability:\n    minAvailable: 1\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	a := d.Spec.Availability
+	if a == nil || a.MinAvailable != 1 || a.AntiAffinity != nil || a.MaxSkew != 0 {
+		t.Fatalf("partial availability = %+v", a)
+	}
+	d, err = Parse([]byte(`{"name":"x","spec":{"availability":{"antiAffinity":true,"maxSkew":2}}}`))
+	if err != nil {
+		t.Fatalf("Parse JSON: %v", err)
+	}
+	a = d.Spec.Availability
+	if a == nil || a.AntiAffinity == nil || !*a.AntiAffinity || a.MaxSkew != 2 {
+		t.Fatalf("JSON availability = %+v", a)
+	}
+}
+
 func TestParseJSON(t *testing.T) {
 	d, err := Parse([]byte(`{"name":"j","namespace":"default","spec":{"model":{"image":"img:v1"},"replicas":2,"port":9000}}`))
 	if err != nil {
@@ -186,6 +218,10 @@ func TestParseErrors(t *testing.T) {
 		{"bad replicas type", "name: x\nspec:\n  replicas: many\n", "must be a number"},
 		{"fractional replicas", "name: x\nspec:\n  replicas: 1.5\n", "must be a number"},
 		{"unknown gate key", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate:\n      bogus: 1\n", "unknown key"},
+		{"unknown availability key", "name: x\nspec:\n  availability:\n    bogus: 1\n", "unknown key"},
+		{"availability not a map", "name: x\nspec:\n  availability: 5\n", "must be a mapping"},
+		{"bad availability bool", "name: x\nspec:\n  availability:\n    antiAffinity: maybe\n", "must be a boolean"},
+		{"bad availability int", "name: x\nspec:\n  availability:\n    maxSkew: many\n", "must be a number"},
 		{"gate not a map", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate: 5\n", "must be a mapping"},
 		{"bad gate value", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate:\n      maxErrorRate: high\n", "must be a number"},
 		{"spec not a map", "name: x\nspec: 5\n", "must be a mapping"},

@@ -33,6 +33,9 @@ type schemaProp struct {
 // strSchema is a plain string field.
 func strSchema(desc string) *schema { return &schema{typ: "string", description: desc} }
 
+// boolSchema is a plain boolean field.
+func boolSchema(desc string) *schema { return &schema{typ: "boolean", description: desc} }
+
 // intSchema is an integer field with an optional range; a nil bound
 // means unbounded on that side.
 func intSchema(desc string, min, max *int64) *schema {
@@ -174,6 +177,12 @@ func SpecSchema() *schema {
 			prop("maxReplicas", intSchema("Ceiling; must be >= minReplicas.", intPtr(1), nil)),
 			prop("targetCPUUtilization", intSchema("Average CPU percentage that triggers scaling (1-100). 0 disables CPU-based scaling.", intPtr(0), intPtr(100))),
 			prop("targetRequestsPerSecond", intSchema("Per-pod request rate that triggers scaling. 0 disables RPS-based scaling.", intPtr(0), nil)),
+		)),
+		prop("availability", objSchema("How the operator keeps the model serving through voluntary disruptions and spreads its pods across nodes. Absent means the operator defaults (anti-affinity on, maxSkew 1, minAvailable replicas-1). minAvailable must be < replicas — enforced by the operator, not the schema.",
+			nil,
+			prop("minAvailable", intSchema("Pods that must stay available during a voluntary disruption. 0 means the default (replicas-1).", intPtr(0), nil)),
+			prop("antiAffinity", boolSchema("Keep pods of one deployment off the same node. Absent means the default (true).")),
+			prop("maxSkew", intSchema("Topology-spread maxSkew: the most pods any one node may hold above the least-loaded node. 0 means the default (1).", intPtr(0), intPtr(10))),
 		)),
 		prop("env", &schema{
 			typ:                  "object",

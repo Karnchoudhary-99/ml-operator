@@ -49,6 +49,10 @@ func TestStatusJSON(t *testing.T) {
 		detail.Version != "v1" || detail.Strategy != "RollingUpdate" || !detail.Requeue {
 		t.Fatalf("status detail view = %+v", detail)
 	}
+	if detail.Availability == nil || detail.Availability.EffectiveMinAvailable(2) != 1 ||
+		!detail.Availability.AntiAffinityEnabled() || detail.Availability.EffectiveMaxSkew() != 1 {
+		t.Fatalf("status detail availability = %+v, want the defaults (minAvailable 1/2, anti-affinity on, maxSkew 1)", detail.Availability)
+	}
 	if len(detail.Conditions) == 0 {
 		t.Fatalf("status detail view has no conditions: %+v", detail)
 	}

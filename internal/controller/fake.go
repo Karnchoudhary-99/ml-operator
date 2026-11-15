@@ -23,6 +23,7 @@ type FakeCluster struct {
 	deployments map[string]render.Deployment
 	services    map[string]render.Service
 	hpas        map[string]render.HPA
+	pdbs        map[string]render.PodDisruptionBudget
 	metrics     map[string]ClusterMetrics
 	ready       map[string]int32
 	// failApplies is the test-only chaos hook: while it is > 0,
@@ -40,6 +41,7 @@ func NewFakeCluster() *FakeCluster {
 		deployments: make(map[string]render.Deployment),
 		services:    make(map[string]render.Service),
 		hpas:        make(map[string]render.HPA),
+		pdbs:        make(map[string]render.PodDisruptionBudget),
 		metrics:     make(map[string]ClusterMetrics),
 		ready:       make(map[string]int32),
 	}
@@ -54,9 +56,10 @@ func (f *FakeCluster) GetDeployment(key string) (render.Deployment, bool) {
 }
 
 // FailNextApplies arms the chaos hook: the next n mutating calls
-// (ApplyDeployment, ApplyService, ApplyHPA, and the deletes) fail
-// with a transient error, then the cluster behaves normally again.
-// It is test-only — the demo and the CLI never call it.
+// (ApplyDeployment, ApplyService, ApplyHPA, ApplyPDB, and the
+// deletes) fail with a transient error, then the cluster behaves
+// normally again. It is test-only — the demo and the CLI never
+// call it.
 func (f *FakeCluster) FailNextApplies(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -167,6 +170,36 @@ func (f *FakeCluster) DeleteHPA(key string) error {
 	return nil
 }
 
+// GetPDB implements Cluster.
+func (f *FakeCluster) GetPDB(key string) (render.PodDisruptionBudget, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.pdbs[key]
+	return p, ok
+}
+
+// ApplyPDB implements Cluster.
+func (f *FakeCluster) ApplyPDB(p render.PodDisruptionBudget) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
+	f.pdbs[p.Namespace+"/"+p.Name] = p
+	return nil
+}
+
+// DeletePDB implements Cluster.
+func (f *FakeCluster) DeletePDB(key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.consumeFailure() {
+		return errTransientApplyFailure
+	}
+	delete(f.pdbs, key)
+	return nil
+}
+
 // Metrics implements Cluster.
 func (f *FakeCluster) Metrics(key string) (ClusterMetrics, bool) {
 	f.mu.Lock()
@@ -260,6 +293,7 @@ type ClusterSnapshot struct {
 	Deployments map[string]render.Deployment
 	Services    map[string]render.Service
 	HPAs        map[string]render.HPA
+	PDBs        map[string]render.PodDisruptionBudget
 	Metrics     map[string]ClusterMetrics
 	Ready       map[string]int32
 }
@@ -272,6 +306,7 @@ func (f *FakeCluster) Snapshot() ClusterSnapshot {
 		Deployments: make(map[string]render.Deployment, len(f.deployments)),
 		Services:    make(map[string]render.Service, len(f.services)),
 		HPAs:        make(map[string]render.HPA, len(f.hpas)),
+		PDBs:        make(map[string]render.PodDisruptionBudget, len(f.pdbs)),
 		Metrics:     make(map[string]ClusterMetrics, len(f.metrics)),
 		Ready:       make(map[string]int32, len(f.ready)),
 	}
@@ -283,6 +318,9 @@ func (f *FakeCluster) Snapshot() ClusterSnapshot {
 	}
 	for k, v := range f.hpas {
 		snap.HPAs[k] = v
+	}
+	for k, v := range f.pdbs {
+		snap.PDBs[k] = v
 	}
 	for k, v := range f.metrics {
 		snap.Metrics[k] = v
@@ -301,6 +339,7 @@ func (f *FakeCluster) Restore(snap ClusterSnapshot) {
 	f.deployments = copyDeploymentMap(snap.Deployments)
 	f.services = copyServiceMap(snap.Services)
 	f.hpas = copyHPAMap(snap.HPAs)
+	f.pdbs = copyPDBMap(snap.PDBs)
 	f.metrics = copyMetricsMap(snap.Metrics)
 	f.ready = copyReadyMap(snap.Ready)
 }
@@ -323,6 +362,14 @@ func copyServiceMap(in map[string]render.Service) map[string]render.Service {
 
 func copyHPAMap(in map[string]render.HPA) map[string]render.HPA {
 	out := make(map[string]render.HPA, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyPDBMap(in map[string]render.PodDisruptionBudget) map[string]render.PodDisruptionBudget {
+	out := make(map[string]render.PodDisruptionBudget, len(in))
 	for k, v := range in {
 		out[k] = v
 	}
@@ -364,4 +411,11 @@ func (f *FakeCluster) HPACount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.hpas)
+}
+
+// PDBCount returns how many PodDisruptionBudgets the fake currently holds.
+func (f *FakeCluster) PDBCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.pdbs)
 }

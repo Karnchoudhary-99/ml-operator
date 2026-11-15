@@ -21,7 +21,7 @@ manifest ──► api ──► registry ──► controller ──► render 
 | --- | --- |
 | `internal/api` | `ModelDeployment` types, `ApplyDefaults`, `Validate` |
 | `internal/registry` | Thread-safe in-memory registry, revisions, watch events |
-| `internal/render` | Desired Deployment / Service / HPA, and diff reasons |
+| `internal/render` | Desired Deployment / Service / HPA / PodDisruptionBudget, and diff reasons |
 | `internal/rollout` | Canary weight ladder, blue-green state machine, health gate, rollout state |
 | `internal/autoscale` | Replica proposals + scale-down stabilization window |
 | `internal/controller` | Reconciler: plan, apply, gate, status, garbage collection |
@@ -61,8 +61,9 @@ recomputes the desired state from the registered spec and the live
 cluster every time, and applies only the difference:
 
 1. **Defaults + validation.** `ApplyDefaults` fills replicas, port,
-   strategy, resources and the health path; `Validate` rejects the
-   rest. An invalid spec never reaches the cluster — the deployment
+   strategy, resources, the health path, and the availability block
+   (anti-affinity on, maxSkew 1, minAvailable left to resolve to
+   replicas-1); `Validate` rejects the rest. An invalid spec never reaches the cluster — the deployment
    goes `Failed` with the validation errors in its status message.
    `Lint` runs alongside it on the spec as written (before
    defaults, so explicit choices stay visible) and warns about
@@ -83,17 +84,30 @@ cluster every time, and applies only the difference:
    scaler owns the count — `spec.replicas` is only the starting
    point, HPA semantics.
 4. **Render + plan.** `render` builds the desired Deployment,
-   Service and HPA. During a canary the stable Deployment keeps
+   Service, HPA and PodDisruptionBudget. During a canary the stable Deployment keeps
    serving the previous image until promotion (only the image and
    version label are pinned); during a blue-green rollout the same
    pinning holds while green soaks, and the desired Service selects
    blue pods until the switch flips it to green. `plan` diffs
    desired vs live and returns the minimal ordered actions:
-   Deployment, canary, green, Service, HPA. Recreate deletes
+   Deployment, canary, green, Service, HPA, PDB. Recreate deletes
    before creating, so old and new model versions never serve side
    by side. A blue-green rollout only exists while a version change
    is in flight — a first deploy or a replica-only change applies
    directly, with no green Deployment at all.
+
+   Hardening rides on the same render: the pod template carries
+   preferred pod anti-affinity (hostname) and one topology-spread
+   constraint (maxSkew, `ScheduleAnyway`), so a multi-replica model
+   spreads across nodes by default; a single replica renders no
+   spread constraint. The PDB selects the model's base labels, so
+   it covers stable, canary and green pods alike, with
+   minAvailable resolving to replicas-1 by default. A single
+   replica renders no PDB at all — a budget that allows every
+   disruption protects nothing — and scaling moves the PDB with
+   the replica count (up updates minAvailable, down to one deletes
+   the PDB). Deleting the deployment garbage-collects the PDB with
+   the rest of its objects.
 5. **Apply.** Each action executes against the `Cluster`
    interface through `retryApply`: a transient cluster error is
    retried with exponential backoff (3 attempts, 100ms base,

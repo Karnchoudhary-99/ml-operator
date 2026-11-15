@@ -100,6 +100,21 @@ func TestValidateRejects(t *testing.T) {
 		}, "env key"},
 		{"health path no slash", func(d *ModelDeployment) { d.Spec.Health.Path = "healthz" }, "health.path"},
 		{"negative health delay", func(d *ModelDeployment) { d.Spec.Health.InitialDelaySeconds = -1 }, "initialDelaySeconds"},
+		{"availability minAvailable negative", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{MinAvailable: -1}
+		}, "minAvailable"},
+		{"availability minAvailable equals replicas", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{MinAvailable: 2}
+		}, "minAvailable (2) must be < replicas (2)"},
+		{"availability minAvailable above replicas", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{MinAvailable: 5}
+		}, "minAvailable (5) must be < replicas (2)"},
+		{"availability maxSkew negative", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{MaxSkew: -1}
+		}, "maxSkew"},
+		{"availability maxSkew too large", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{MaxSkew: 11}
+		}, "maxSkew"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -196,6 +211,76 @@ func TestApplyDefaults(t *testing.T) {
 	}
 	if *d2.Spec.Replicas != 2 || d2.Spec.Port != 8080 {
 		t.Fatalf("explicit replicas/port overwritten: %d/%d", *d2.Spec.Replicas, d2.Spec.Port)
+	}
+}
+
+// TestAvailabilityEffectiveValues pins the "zero means default"
+// resolution: a nil spec and a zero spec both resolve to
+// replicas-1 / anti-affinity on / maxSkew 1, and a single replica
+// has an effective minAvailable of 0 (nothing to protect).
+func TestAvailabilityEffectiveValues(t *testing.T) {
+	var nilSpec *AvailabilitySpec
+	if got := nilSpec.EffectiveMinAvailable(3); got != 2 {
+		t.Fatalf("nil EffectiveMinAvailable(3) = %d, want 2", got)
+	}
+	if !nilSpec.AntiAffinityEnabled() {
+		t.Fatal("nil AntiAffinityEnabled() = false, want true")
+	}
+	if got := nilSpec.EffectiveMaxSkew(); got != 1 {
+		t.Fatalf("nil EffectiveMaxSkew() = %d, want 1", got)
+	}
+	if got := nilSpec.EffectiveMinAvailable(1); got != 0 {
+		t.Fatalf("nil EffectiveMinAvailable(1) = %d, want 0", got)
+	}
+
+	zero := &AvailabilitySpec{}
+	if got := zero.EffectiveMinAvailable(4); got != 3 {
+		t.Fatalf("zero EffectiveMinAvailable(4) = %d, want 3", got)
+	}
+	explicit := &AvailabilitySpec{MinAvailable: 1, AntiAffinity: boolPtr(false), MaxSkew: 2}
+	if got := explicit.EffectiveMinAvailable(4); got != 1 {
+		t.Fatalf("explicit EffectiveMinAvailable(4) = %d, want 1", got)
+	}
+	if explicit.AntiAffinityEnabled() {
+		t.Fatal("explicit AntiAffinityEnabled() = true, want false")
+	}
+	if got := explicit.EffectiveMaxSkew(); got != 2 {
+		t.Fatalf("explicit EffectiveMaxSkew() = %d, want 2", got)
+	}
+}
+
+// TestApplyDefaultsAvailability pins the defaulting contract: a
+// nil availability block takes the full default set, and a partial
+// block keeps the user's minAvailable while the anti-affinity flag
+// fills in — setting minAvailable must not silently switch
+// anti-affinity off.
+func TestApplyDefaultsAvailability(t *testing.T) {
+	d := &ModelDeployment{
+		Name: "minimal",
+		Spec: ModelDeploymentSpec{Model: ModelSpec{Image: "img:latest"}},
+	}
+	ApplyDefaults(d)
+	if d.Spec.Availability == nil {
+		t.Fatal("nil availability block was not defaulted")
+	}
+	if !d.Spec.Availability.AntiAffinityEnabled() {
+		t.Fatal("defaulted anti-affinity is off, want on")
+	}
+	if d.Spec.Availability.MinAvailable != 0 || d.Spec.Availability.MaxSkew != 0 {
+		t.Fatalf("defaulted availability = %+v, want zero minAvailable/maxSkew", d.Spec.Availability)
+	}
+
+	d2 := validDeployment()
+	d2.Spec.Availability = &AvailabilitySpec{MinAvailable: 1}
+	ApplyDefaults(d2)
+	if d2.Spec.Availability.MinAvailable != 1 {
+		t.Fatalf("explicit minAvailable overwritten: %d", d2.Spec.Availability.MinAvailable)
+	}
+	if !d2.Spec.Availability.AntiAffinityEnabled() {
+		t.Fatal("partial availability block lost its anti-affinity default")
+	}
+	if errs := Validate(d2); errs != nil {
+		t.Fatalf("defaulted availability deployment should validate, got %v", errs)
 	}
 }
 

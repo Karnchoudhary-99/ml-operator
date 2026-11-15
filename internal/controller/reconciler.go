@@ -37,6 +37,12 @@ const (
 	ActionUpdateHPA ActionKind = "UpdateHPA"
 	// ActionDeleteHPA deletes the HorizontalPodAutoscaler.
 	ActionDeleteHPA ActionKind = "DeleteHPA"
+	// ActionCreatePDB creates the PodDisruptionBudget.
+	ActionCreatePDB ActionKind = "CreatePDB"
+	// ActionUpdatePDB updates the PodDisruptionBudget.
+	ActionUpdatePDB ActionKind = "UpdatePDB"
+	// ActionDeletePDB deletes the PodDisruptionBudget.
+	ActionDeletePDB ActionKind = "DeletePDB"
 	// ActionNoOp means the live state already matches the desired
 	// state; the plan contains exactly one NoOp action.
 	ActionNoOp ActionKind = "NoOp"
@@ -394,12 +400,13 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		}
 	}
 	desiredHPA, hasHPA := render.HPAFor(d)
+	desiredPDB, hasPDB := render.PDBFor(d)
 
-	plan := r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA)
+	plan := r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA, desiredPDB, hasPDB)
 	actions := plan
 	for _, a := range plan {
 		if err := r.retryApply(key, string(a.Kind), a.Key, func() error {
-			return r.apply(a, desired, canary, green, desiredSvc, desiredHPA)
+			return r.apply(a, desired, canary, green, desiredSvc, desiredHPA, desiredPDB)
 		}); err != nil {
 			// A failed apply is Degraded, not Failed: the spec is
 			// fine, the cluster operation is what broke, and the
@@ -562,7 +569,8 @@ func (r *Reconciler) Plan(key string) ([]Action, error) {
 		}
 	}
 	desiredHPA, hasHPA := render.HPAFor(d)
-	return r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA), nil
+	desiredPDB, hasPDB := render.PDBFor(d)
+	return r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA, desiredPDB, hasPDB), nil
 }
 
 // rolloutState returns the rollout state for key, starting a fresh
@@ -903,13 +911,15 @@ func (r *Reconciler) foldBlueGreen(key string, d api.ModelDeployment, bg rollout
 
 // plan diffs the desired state against the live cluster and returns
 // the minimal ordered apply plan: Deployment first, then canary (if
-// any), then green (if any), then Service, then HPA. It never
-// mutates the cluster. canary is nil when no canary Deployment is
-// desired for this reconcile — either the strategy is not Canary,
+// any), then green (if any), then Service, then HPA, then PDB. It
+// never mutates the cluster. canary is nil when no canary Deployment
+// is desired for this reconcile — either the strategy is not Canary,
 // or the rollout already finished. green is nil on the same terms
 // for a blue-green rollout. hasHPA is false when autoscaling is
-// disabled: any live HPA is then deleted as leftover.
-func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service, canary *render.Deployment, green *render.Deployment, desiredHPA render.HPA, hasHPA bool) []Action {
+// disabled: any live HPA is then deleted as leftover. hasPDB is
+// false when the deployment has a single replica (nothing to
+// protect): any live PDB is then deleted as leftover.
+func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Deployment, desiredSvc render.Service, canary *render.Deployment, green *render.Deployment, desiredHPA render.HPA, hasHPA bool, desiredPDB render.PodDisruptionBudget, hasPDB bool) []Action {
 	var actions []Action
 
 	live, ok := r.Cluster.GetDeployment(key)
@@ -978,6 +988,20 @@ func (r *Reconciler) plan(key string, d api.ModelDeployment, desired render.Depl
 		// Autoscaling was disabled: the leftover HPA would keep
 		// scaling the Deployment, so remove it.
 		actions = append(actions, Action{Kind: ActionDeleteHPA, Key: key, Reason: "autoscaling disabled"})
+	}
+
+	livePDB, ok := r.Cluster.GetPDB(key)
+	if hasPDB {
+		if !ok {
+			actions = append(actions, Action{Kind: ActionCreatePDB, Key: key, Reason: "pod disruption budget does not exist"})
+		} else if reasons := render.PDBDiffReasons(desiredPDB, livePDB); len(reasons) > 0 {
+			actions = append(actions, Action{Kind: ActionUpdatePDB, Key: key, Reason: strings.Join(reasons, ", ")})
+		}
+	} else if ok {
+		// A single replica has nothing to protect: the leftover
+		// PDB would claim an availability the deployment no
+		// longer has, so remove it.
+		actions = append(actions, Action{Kind: ActionDeletePDB, Key: key, Reason: "no pod disruption budget desired"})
 	}
 
 	if len(actions) == 0 {
@@ -1052,7 +1076,7 @@ func (r *Reconciler) retryApply(key, kind, target string, fn func() error) error
 
 // apply executes one plan action against the cluster, resolving the
 // object from the desired state the plan was built from.
-func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.Deployment, green *render.Deployment, svc render.Service, hpa render.HPA) error {
+func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.Deployment, green *render.Deployment, svc render.Service, hpa render.HPA, pdb render.PodDisruptionBudget) error {
 	switch a.Kind {
 	case ActionCreateDeployment, ActionUpdateDeployment:
 		stableKey := desired.Namespace + "/" + desired.Name
@@ -1082,6 +1106,10 @@ func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.D
 		return r.Cluster.ApplyHPA(hpa)
 	case ActionDeleteHPA:
 		return r.Cluster.DeleteHPA(a.Key)
+	case ActionCreatePDB, ActionUpdatePDB:
+		return r.Cluster.ApplyPDB(pdb)
+	case ActionDeletePDB:
+		return r.Cluster.DeletePDB(a.Key)
 	case ActionNoOp:
 		return nil
 	}
@@ -1090,7 +1118,7 @@ func (r *Reconciler) apply(a Action, desired render.Deployment, canary *render.D
 
 // reconcileDeleted removes the cluster objects owned by a deployment
 // that left the registry: stable Deployment, canary Deployment (if
-// any), green Deployment (if any), Service, and HPA. Deleting
+// any), green Deployment (if any), Service, HPA, and PDB. Deleting
 // something already gone is a no-op. The autoscaler state goes too,
 // so a later deployment with the same name starts with a fresh
 // stabilization window.
@@ -1115,6 +1143,7 @@ func (r *Reconciler) reconcileDeleted(key string) (Result, error) {
 		{ActionDeleteDeployment, greenKey, r.hasDeployment, r.Cluster.DeleteDeployment},
 		{ActionDeleteService, key, r.hasService, r.Cluster.DeleteService},
 		{ActionDeleteHPA, key, r.hasHPA, r.Cluster.DeleteHPA},
+		{ActionDeletePDB, key, r.hasPDB, r.Cluster.DeletePDB},
 	} {
 		if !target.get(target.key) {
 			continue
@@ -1145,6 +1174,11 @@ func (r *Reconciler) hasService(key string) bool {
 
 func (r *Reconciler) hasHPA(key string) bool {
 	_, ok := r.Cluster.GetHPA(key)
+	return ok
+}
+
+func (r *Reconciler) hasPDB(key string) bool {
+	_, ok := r.Cluster.GetPDB(key)
 	return ok
 }
 

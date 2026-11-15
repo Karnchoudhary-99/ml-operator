@@ -61,6 +61,15 @@ type Deployment struct {
 	// rollout; the stable Deployment always has Green false.
 	Green     bool
 	Container Container
+	// AntiAffinity, when true, spreads this Deployment's pods
+	// across nodes (preferred pod anti-affinity on the hostname
+	// topology key). Off only when the spec explicitly disables
+	// it — the operator default is on.
+	AntiAffinity bool
+	// TopologySpread holds the topology-spread constraints for
+	// the pod template; empty when the Deployment has a single
+	// replica (nothing to spread).
+	TopologySpread []TopologySpreadConstraint
 }
 
 // Service is the rendered ClusterIP Service fronting a model.
@@ -92,6 +101,34 @@ type HPA struct {
 	// TargetRequestsPerSecond is the per-pod request-rate target (0
 	// disables RPS-based scaling).
 	TargetRequestsPerSecond int32
+}
+
+// PodDisruptionBudget is the rendered PDB for a model: it keeps at
+// least MinAvailable pods serving through voluntary disruptions
+// (node drains, upgrades). The selector is the model's base
+// selector, so it covers stable, canary and green pods alike —
+// availability is a property of the model, not of one revision,
+// and a canary pod counts toward the available count while it
+// serves. Callers must run api.ApplyDefaults first so the
+// availability block exists.
+type PodDisruptionBudget struct {
+	Name         string
+	Namespace    string
+	Labels       map[string]string
+	Selector     map[string]string
+	MinAvailable int32
+}
+
+// TopologySpreadConstraint is one pod topology-spread rule for a
+// rendered Deployment: at most MaxSkew more pods on the busiest
+// node than on the quietest one. WhenUnsatisfiable is always
+// "ScheduleAnyway": spreading is a preference, never a reason to
+// leave a model pod unscheduled when the cluster is tight.
+type TopologySpreadConstraint struct {
+	MaxSkew           int32
+	TopologyKey       string // "kubernetes.io/hostname"
+	WhenUnsatisfiable string // "ScheduleAnyway"
+	LabelSelector     map[string]string
 }
 
 // Labels returns the labels identifying a model's objects. The
@@ -134,7 +171,7 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 	// selects green pods only, and the Service (which selects
 	// green=false) never routes to green pods until the cutover.
 	labels["ml-operator/green"] = "false"
-	return Deployment{
+	dep := Deployment{
 		Name:      d.Name,
 		Namespace: d.Namespace,
 		Replicas:  replicas,
@@ -143,6 +180,21 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 		Canary:    false,
 		Container: containerFor(d),
 	}
+	// Hardening travels with the pod template: anti-affinity and
+	// the spread constraint apply to canary and green Deployments
+	// too, since they derive from this one. A single replica has
+	// nothing to spread, so the constraint is omitted there —
+	// the PDB render makes the same call for the same reason.
+	dep.AntiAffinity = d.Spec.Availability.AntiAffinityEnabled()
+	if replicas > 1 {
+		dep.TopologySpread = []TopologySpreadConstraint{{
+			MaxSkew:           d.Spec.Availability.EffectiveMaxSkew(),
+			TopologyKey:       "kubernetes.io/hostname",
+			WhenUnsatisfiable: "ScheduleAnyway",
+			LabelSelector:     Selector(d),
+		}}
+	}
+	return dep
 }
 
 // CanaryDeploymentFor renders the small canary Deployment for a
@@ -276,6 +328,43 @@ func HPAFor(d api.ModelDeployment) (HPA, bool) {
 	}, true
 }
 
+// PDBFor renders the PodDisruptionBudget for d, or false when the
+// model has nothing to protect: a single replica resolves to an
+// effective minAvailable of 0, and a PDB that allows every
+// disruption protects nothing, so the operator renders none and
+// `mlop diff` stays clean for the default one-replica deployment.
+func PDBFor(d api.ModelDeployment) (PodDisruptionBudget, bool) {
+	replicas := int32(1)
+	if d.Spec.Replicas != nil {
+		replicas = *d.Spec.Replicas
+	}
+	min := d.Spec.Availability.EffectiveMinAvailable(replicas)
+	if min <= 0 {
+		return PodDisruptionBudget{}, false
+	}
+	return PodDisruptionBudget{
+		Name:         d.Name,
+		Namespace:    d.Namespace,
+		Labels:       Labels(d),
+		Selector:     Selector(d),
+		MinAvailable: min,
+	}, true
+}
+
+// PDBDiffReasons compares the fields the reconciler manages on a
+// PDB and returns a human-readable reason per difference, or nil
+// when the live PDB already matches the desired one.
+func PDBDiffReasons(desired, live PodDisruptionBudget) []string {
+	var reasons []string
+	if desired.MinAvailable != live.MinAvailable {
+		reasons = append(reasons, fmt.Sprintf("minAvailable %d -> %d", live.MinAvailable, desired.MinAvailable))
+	}
+	if !labelsEqual(desired.Selector, live.Selector) {
+		reasons = append(reasons, "selector changed")
+	}
+	return reasons
+}
+
 // HPADiffReasons compares the fields the reconciler manages on an
 // HPA and returns a human-readable reason per difference, or nil
 // when the live HPA already matches the desired one.
@@ -321,6 +410,12 @@ func DeploymentDiffReasons(desired, live Deployment) []string {
 	}
 	if c.ReadinessProbe != l.ReadinessProbe {
 		reasons = append(reasons, fmt.Sprintf("readiness probe %q -> %q", l.ReadinessProbe.Path, c.ReadinessProbe.Path))
+	}
+	if desired.AntiAffinity != live.AntiAffinity {
+		reasons = append(reasons, fmt.Sprintf("antiAffinity %v -> %v", live.AntiAffinity, desired.AntiAffinity))
+	}
+	if !topologySpreadEqual(desired.TopologySpread, live.TopologySpread) {
+		reasons = append(reasons, "topology spread changed")
 	}
 	return reasons
 }
@@ -382,6 +477,21 @@ func labelsEqual(a, b map[string]string) bool {
 	}
 	for k, v := range a {
 		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
+func topologySpreadEqual(a, b []TopologySpreadConstraint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].MaxSkew != b[i].MaxSkew ||
+			a[i].TopologyKey != b[i].TopologyKey ||
+			a[i].WhenUnsatisfiable != b[i].WhenUnsatisfiable ||
+			!labelsEqual(a[i].LabelSelector, b[i].LabelSelector) {
 			return false
 		}
 	}
