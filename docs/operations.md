@@ -135,6 +135,23 @@ The trail is capped at 50 entries per deployment and persists in
 the state file, so it survives across CLI invocations; deleting
 a deployment drops its trail with it.
 
+## Waiting for a rollout
+
+```bash
+mlop watch iris-mlp                      # exit 0 on Available, 1 on Failed/Degraded, 2 on timeout
+mlop watch iris-mlp --interval 10s --timeout 10m
+mlop watch --all                         # waits for every deployment at once
+mlop watch iris-mlp --json               # one JSON object per phase transition
+```
+
+Watch polls the deployment, reconciling on every tick, and prints
+only when the phase changes — a steady Progressing deployment
+prints one line, not one per second. It pairs with `mlop ready`:
+run `ready` in one shell to simulate pods coming up, `watch` in
+another to wait for the rollout to land. Scripts should check the
+exit code, not parse the text: 0 is Available, 1 is a failure
+(Failed or Degraded), 2 is the timeout expiring first.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a

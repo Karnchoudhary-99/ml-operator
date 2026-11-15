@@ -32,6 +32,7 @@ with the desired state.
 - [x] Operator configuration (config file + env + flags, periodic resync)
 - [x] CRD + install manifests (`mlop crd` / `mlop install`, golden-tested)
 - [x] State backup + restore (`mlop backup` / `mlop restore`, checksummed)
+- [x] Wait for a rollout (`mlop watch`, text + JSON stream, `--all`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -260,7 +261,7 @@ cluster until the controller-runtime phase).
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`, `crd`, `install`)
+- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`, `watch`, `crd`, `install`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
 - `internal/crd` — CRD + install manifest generation (no external deps)
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
