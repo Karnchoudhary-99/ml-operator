@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
+	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
 	"github.com/Karnchoudhary-99/ml-operator/internal/manifest"
 	"github.com/Karnchoudhary-99/ml-operator/internal/registry"
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
@@ -69,10 +70,36 @@ func cmdApply(opts *options, args []string) int {
 	}
 	rt := st.Restore()
 
-	// Generation is the CLI's job, never the manifest's: a new key
-	// starts at 1, a changed spec bumps the existing generation, an
-	// identical re-apply keeps it (the registry treats it as a
-	// no-op, so nothing is re-rolled).
+	line, res, err := applyDeployment(rt, d)
+	if err != nil {
+		fmt.Fprintf(opts.stderr, "mlop apply: reconcile %s: %v\n", d.Key(), err)
+		return 1
+	}
+	if err := store.Save(opts.statePath, store.From(rt.Registry, rt.Cluster, rt.Reconciler)); err != nil {
+		fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(opts.stdout, line)
+	for _, w := range warnings {
+		fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
+	}
+	for _, a := range res.Actions {
+		fmt.Fprintf(opts.stdout, "  - %s %s (%s)\n", a.Kind, a.Key, a.Reason)
+	}
+	if res.Message != "" {
+		fmt.Fprintf(opts.stdout, "  %s\n", res.Message)
+	}
+	return 0
+}
+
+// applyDeployment registers one parsed manifest in the runtime and
+// reconciles it once: a new key starts at generation 1, a changed
+// spec bumps the existing generation, an identical re-apply keeps
+// it (the registry treats it as a no-op, so nothing is re-rolled).
+// It returns the one-line summary cmdApply prints and the
+// reconcile result. Callers persist the state themselves, so a
+// batch apply can register many deployments before saving once.
+func applyDeployment(rt *store.Runtime, d api.ModelDeployment) (string, controller.Result, error) {
 	key := d.Key()
 	changed := true
 	if existing := rt.Registry.Get(key); existing != nil {
@@ -89,26 +116,11 @@ func cmdApply(opts *options, args []string) int {
 
 	res, err := rt.Reconciler.Reconcile(key)
 	if err != nil {
-		fmt.Fprintf(opts.stderr, "mlop apply: reconcile %s: %v\n", key, err)
-		return 1
+		return "", res, err
 	}
-	if err := store.Save(opts.statePath, store.From(rt.Registry, rt.Cluster, rt.Reconciler)); err != nil {
-		fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
-		return 1
+	verb := "applied"
+	if !changed {
+		verb = "unchanged"
 	}
-	if changed {
-		fmt.Fprintf(opts.stdout, "applied %s (generation %d): phase=%s\n", key, d.Generation, res.Phase)
-	} else {
-		fmt.Fprintf(opts.stdout, "unchanged %s (generation %d): phase=%s\n", key, d.Generation, res.Phase)
-	}
-	for _, w := range warnings {
-		fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
-	}
-	for _, a := range res.Actions {
-		fmt.Fprintf(opts.stdout, "  - %s %s (%s)\n", a.Kind, a.Key, a.Reason)
-	}
-	if res.Message != "" {
-		fmt.Fprintf(opts.stdout, "  %s\n", res.Message)
-	}
-	return 0
+	return fmt.Sprintf("%s %s (generation %d): phase=%s", verb, key, d.Generation, res.Phase), res, nil
 }
