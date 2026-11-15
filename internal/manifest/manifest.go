@@ -83,7 +83,7 @@ func mapDeployment(tree map[string]any, d *api.ModelDeployment) error {
 func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
-		"canary", "blueGreen", "autoscaling", "env", "health",
+		"canary", "blueGreen", "autoscaling", "availability", "env", "health",
 	}, "spec"); err != nil {
 		return err
 	}
@@ -265,6 +265,39 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 		s.Autoscaling = as
 	}
 
+	if raw, ok := spec["availability"]; ok {
+		a, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("spec.availability: must be a mapping")
+		}
+		if err := checkKeys(a, []string{"minAvailable", "antiAffinity", "maxSkew"}, "spec.availability"); err != nil {
+			return err
+		}
+		as := &api.AvailabilitySpec{}
+		if v, ok := a["minAvailable"]; ok {
+			n, err := intField(v, "spec.availability.minAvailable")
+			if err != nil {
+				return err
+			}
+			as.MinAvailable = int32(n)
+		}
+		if v, ok := a["antiAffinity"]; ok {
+			b, err := boolField(v, "spec.availability.antiAffinity")
+			if err != nil {
+				return err
+			}
+			as.AntiAffinity = &b
+		}
+		if v, ok := a["maxSkew"]; ok {
+			n, err := intField(v, "spec.availability.maxSkew")
+			if err != nil {
+				return err
+			}
+			as.MaxSkew = int32(n)
+		}
+		s.Availability = as
+	}
+
 	if raw, ok := spec["env"]; ok {
 		e, ok := raw.(map[string]any)
 		if !ok {
@@ -379,6 +412,24 @@ func intField(raw any, path string) (int64, error) {
 		return n, nil
 	default:
 		return 0, fmt.Errorf("%s: must be a number", path)
+	}
+}
+
+// boolField reads a boolean field. YAML booleans arrive as bool;
+// the strings "true"/"false" are accepted too, so JSON-style
+// quoted booleans work.
+func boolField(raw any, path string) (bool, error) {
+	switch v := raw.(type) {
+	case bool:
+		return v, nil
+	case string:
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return false, fmt.Errorf("%s: must be a boolean, got %q", path, v)
+		}
+		return b, nil
+	default:
+		return false, fmt.Errorf("%s: must be a boolean", path)
 	}
 }
 
