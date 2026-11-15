@@ -138,6 +138,26 @@ func TestApplyDryRunAndInvalid(t *testing.T) {
 	}
 }
 
+func TestApplyShowsWarnings(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	latest := writeManifest(t, strings.Replace(irisV1, "iris-mlp:v1", "iris-mlp:latest", 1))
+	// A :latest apply still succeeds, but the warning is printed.
+	code, out, _ := runCLIState(t, state, "apply", "-f", latest)
+	if code != 0 || !strings.Contains(out, "applied default/iris-mlp (generation 1)") || !strings.Contains(out, ":latest tag") {
+		t.Fatalf("apply :latest exit %d, out %q", code, out)
+	}
+	// The dry-run shows it too, before anything is applied.
+	clean := writeManifest(t, irisV1)
+	code, out, _ = runCLIState(t, state, "apply", "-f", clean, "--dry-run")
+	if code != 0 || strings.Contains(out, "warning:") {
+		t.Fatalf("dry-run clean exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "apply", "-f", latest, "--dry-run")
+	if code != 0 || !strings.Contains(out, "valid: default/iris-mlp") || !strings.Contains(out, ":latest tag") {
+		t.Fatalf("dry-run :latest exit %d, out %q", code, out)
+	}
+}
+
 func TestStatusErrors(t *testing.T) {
 	code, out, _ := runCLI(t, "status")
 	if code != 0 || !strings.Contains(out, "no deployments") {

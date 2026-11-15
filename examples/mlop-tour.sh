@@ -17,6 +17,10 @@ go build -o "$MLOP" ./cmd/mlop
 
 step() { echo; echo "=== $* ==="; }
 
+step "validate the manifests before applying anything"
+"$MLOP" --state "$STATE" validate -f examples/iris-mlp.yaml | grep -q "valid: default/iris-mlp"
+"$MLOP" --state "$STATE" validate -f examples/iris-mlp-canary.yaml --strict | grep -q "valid: default/iris-mlp"
+
 step "apply iris-mlp v1"
 "$MLOP" --state "$STATE" apply -f examples/iris-mlp.yaml
 

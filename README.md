@@ -23,6 +23,7 @@ with the desired state.
 - [x] Per-rollout health-gate thresholds (`canary.gate`)
 - [x] Rollback to previous version (`mlop rollback`)
 - [x] Diff preview + JSON output (`mlop diff`, `status`/`logs --json`)
+- [x] Preflight validation (`mlop validate`, warnings + `--strict`)
 - [x] Metrics + events (Prometheus, Kubernetes events)
 - [x] Metrics HTTP endpoint (`--metrics-addr`, `/metrics` + `/healthz`)
 - [x] Deployment history audit trail (`mlop history`)
@@ -70,6 +71,25 @@ mlop status
 mlop status iris-mlp
 ```
 
+Before applying a changed manifest, preflight it — `mlop validate`
+runs the same checks `apply` runs (validation on the defaulted
+spec, lint warnings on the spec as written) without changing any
+state, so a bad manifest fails in CI instead of halfway through a
+rollout. It also checks a stored deployment by name. `--strict`
+fails on warnings too, for gates that want a clean bill of health:
+
+```bash
+mlop validate -f examples/iris-mlp.yaml
+# valid: default/iris-mlp
+#   no warnings
+
+mlop validate -f examples/risky.yaml
+# valid: default/iris-mlp
+#   warning: spec.model.image "registry.example.com/iris-mlp:latest" uses the :latest tag; ...
+
+mlop validate iris-mlp --json   # {"deployment": "default/iris-mlp", "valid": true, ...}
+```
+
 Before applying a changed manifest, preview exactly what the
 reconciler would do — `mlop diff` computes the apply plan without
 changing any state (no cluster writes, no status writes, no state
@@ -85,7 +105,7 @@ mlop diff -f examples/iris-mlp-canary.yaml
 #   - CreateDeployment default/iris-mlp-canary (canary deployment does not exist)
 ```
 
-For scripts and dashboards, `status`, `logs` and `diff` all take
+For scripts and dashboards, `status`, `logs`, `diff` and `validate` all take
 `--json` and print the same data as JSON (an empty list is `[]`):
 
 ```bash
@@ -196,7 +216,7 @@ examples/mlop-tour.sh
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`)
+- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
 - `internal/store` — JSON state file shared between mlop invocations

@@ -259,9 +259,9 @@ func TestSpecsEqualGates(t *testing.T) {
 	// blueGreen block differs from a present one.
 	bg := func(gate *api.GateSpec) api.ModelDeploymentSpec {
 		s := api.ModelDeploymentSpec{
-			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
-			Port:     8080,
-			Strategy: api.StrategyBlueGreen,
+			Model:     api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:      8080,
+			Strategy:  api.StrategyBlueGreen,
 			BlueGreen: &api.BlueGreenSpec{Gate: gate},
 		}
 		return s

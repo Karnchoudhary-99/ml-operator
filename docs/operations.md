@@ -166,14 +166,16 @@ differs from the desired state, and `mlop logs <name>` for the
 last recorded transition.
 
 **State file confusion.** If the simulated world gets into a state
-you cannot explain, `mlop diff` and `mlop logs` are read-only and
+you cannot explain, `mlop validate`, `mlop diff` and `mlop logs` are read-only and
 safe to run. Deleting the state file resets everything — the
 manifests are the source of truth, so re-applying them rebuilds
 the world.
 
 ## Pre-flight checklist (before every apply)
 
-1. `mlop diff -f <manifest>` — read the plan, not just the phase.
+1. `mlop validate -f <manifest>` — errors fail, warnings are listed;
+   `--strict` fails on warnings too. In CI, gate the apply on it.
+2. `mlop diff -f <manifest>` — read the plan, not just the phase.
 2. For a canary or blue-green rollout: is the gate right for this
    model? A latency-sensitive model wants a tighter gate
    (`canary.gate` / `blueGreen.gate`, `maxP95LatencyMs`); a noisy
