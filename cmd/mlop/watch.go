@@ -20,13 +20,23 @@ func cmdWatch(opts *options, args []string) int {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	fs.SetOutput(opts.stderr)
 	fs.Usage = func() {
-		fmt.Fprint(opts.stderr, "Usage: mlop watch <name>\n")
+		fmt.Fprint(opts.stderr, "Usage: mlop watch <name> [--interval 1s] [--timeout 5m]\n")
 	}
+	interval := fs.Duration("interval", time.Second, "how often to reconcile and re-check the phase")
+	timeout := fs.Duration("timeout", 5*time.Minute, "give up after this long without a terminal phase")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(opts.stderr, "mlop watch: exactly one deployment name is required")
+		return 2
+	}
+	if *interval <= 0 {
+		fmt.Fprintln(opts.stderr, "mlop watch: --interval must be positive")
+		return 2
+	}
+	if *timeout <= 0 {
+		fmt.Fprintln(opts.stderr, "mlop watch: --timeout must be positive")
 		return 2
 	}
 	key := resolveKey(fs.Arg(0))
@@ -42,11 +52,10 @@ func cmdWatch(opts *options, args []string) int {
 		return 1
 	}
 
-	// Poll every second for up to five minutes: long enough for a
-	// canary step to advance, short enough to fail loudly instead
-	// of hanging a script forever.
-	interval := time.Second
-	deadline := time.Now().Add(5 * time.Minute)
+	// Poll on the configured interval until the timeout: long
+	// enough for a canary step to advance by default, short
+	// enough to fail loudly instead of hanging a script forever.
+	deadline := time.Now().Add(*timeout)
 	// Print only when the phase changes: a steady Progressing
 	// deployment would otherwise spam one line per second for
 	// minutes. The first snapshot always prints.
@@ -77,9 +86,9 @@ func cmdWatch(opts *options, args []string) int {
 			return 1
 		}
 		if time.Now().After(deadline) {
-			fmt.Fprintf(opts.stderr, "mlop watch: timed out after 5m0s waiting for %s\n", key)
+			fmt.Fprintf(opts.stderr, "mlop watch: timed out after %s waiting for %s\n", *timeout, key)
 			return 2
 		}
-		time.Sleep(interval)
+		time.Sleep(*interval)
 	}
 }
