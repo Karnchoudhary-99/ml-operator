@@ -108,6 +108,41 @@ func TestWatchErrors(t *testing.T) {
 
 // TestWatchJSON checks the --json stream: one valid JSON object per
 // transition, with the phase and the ready count in it.
+// TestWatchAll watches two deployments at once: it times out
+// while one is still Progressing, and exits 0 once both are
+// Available. The stream carries one line per deployment.
+func TestWatchAll(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	iris := writeManifest(t, irisV1)
+	other := writeManifest(t, strings.Replace(irisV1, "iris-mlp", "house-price", 1))
+	if code, _, _ := runCLIState(t, state, "apply", "-f", iris); code != 0 {
+		t.Fatalf("apply iris failed")
+	}
+	if code, _, _ := runCLIState(t, state, "apply", "-f", other); code != 0 {
+		t.Fatalf("apply house-price failed")
+	}
+	// Only iris is ready: --all still waits (exit 2), and the
+	// stream has one line per deployment.
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready iris failed")
+	}
+	code, out, errOut := runCLIState(t, state, "watch", "--all", "--interval", "10ms", "--timeout", "120ms")
+	if code != 2 || !strings.Contains(errOut, "all deployments") {
+		t.Fatalf("watch --all timeout exit %d, out %q, err %q", code, out, errOut)
+	}
+	if !strings.Contains(out, "default/iris-mlp: Available") || !strings.Contains(out, "default/house-price: Progressing") {
+		t.Fatalf("watch --all stream %q, want one line per deployment", out)
+	}
+	// Both ready now: --all exits 0.
+	if code, _, _ := runCLIState(t, state, "ready", "house-price", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready house-price failed")
+	}
+	code, out, _ = runCLIState(t, state, "watch", "--all", "--interval", "10ms", "--timeout", "5s")
+	if code != 0 || !strings.Contains(out, "default/iris-mlp: Available") || !strings.Contains(out, "default/house-price: Available") {
+		t.Fatalf("watch --all exit %d, out %q", code, out)
+	}
+}
+
 func TestWatchJSON(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 	manifest := writeManifest(t, irisV1)
