@@ -205,6 +205,57 @@ simulate pods coming up. The controller-runtime phase replaces
 this with a real client without touching the reconciler: the plan,
 gate and state machine only ever see the interface.
 
+## CRD and installation
+
+The operator is installable on a real cluster before the
+controller-runtime phase lands: `internal/crd` generates the
+manifests from the same code the operator validates against, so
+the installed CRD can never drift from the operator's rules.
+
+- **CustomResourceDefinition** (`modeldeployments.ml.example.com`,
+  `v1alpha1`, Namespaced, short name `mldep`): the openAPIV3
+  schema for spec and status mirrors `api.Validate` field for
+  field — port 1–65535, canary weight 1–99, gate fractions 0–1,
+  strategy and phase enums — so the API server rejects a bad spec
+  at admission time, before the operator ever sees it. The status
+  subresource is enabled, so status is only ever written by the
+  operator, never by an apply. `kubectl get mldep` shows Phase,
+  Ready and Age columns.
+- **Install bundle** (Namespace `ml-operator-system`,
+  ServiceAccount, ClusterRole, ClusterRoleBinding, operator
+  Deployment): RBAC is least privilege for what the reconciler
+  does today — ModelDeployments plus their status, the
+  Deployments/Services/HPAs it renders, read-only pods for
+  readiness, and event creation. No secrets, no nodes, no
+  cluster-admin. The Deployment runs one replica of
+  `ghcr.io/karnchoudhary-99/ml-operator:v0.1.0` with
+  `--namespace=default --metrics-addr=:8080
+  --reconcile-interval=30s`, a `/healthz` liveness probe, and
+  100m/128Mi requests.
+
+Generate them, never hand-edit them:
+
+```bash
+mlop crd                               # the CRD alone
+mlop crd | kubectl apply -f -
+mlop install                           # Namespace + RBAC + Deployment
+mlop install --namespace team-ml --image registry.example.com/ml-operator:v0.2.0 | kubectl apply -f -
+```
+
+The generated files are checked in under `examples/` (`crd.yaml`,
+`install.yaml`) and golden-tested: a schema or install change
+that forgets to regenerate fails the suite with the exact command
+to run. The API group (`ml.example.com`) is a placeholder until
+the project registers a real domain; changing it later is a
+breaking change for every installed CRD.
+
+Two things the schema language cannot express stay in
+`api.Validate` instead: cross-field rules (autoscaling
+`minReplicas <= maxReplicas`, "at least one scaling target") and
+the gate rule that a zero threshold takes the operator default
+rather than disabling its check. The schema is the first gate;
+the operator's validation is the second.
+
 ## State and persistence
 
 `mlop` persists the registry, the fake cluster, rollout state and
