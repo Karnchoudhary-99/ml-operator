@@ -33,11 +33,12 @@ type ClusterMetrics struct {
 }
 
 // Cluster is the minimal cluster surface the reconciler needs. It is
-// deliberately narrow — get/apply/delete for Deployments, Services
-// and HPAs plus readiness and load metrics — so the real Kubernetes
-// client and the in-memory fake used by tests and the demo share one
-// contract. Keys are "namespace/name" (see api.ModelDeployment.Key);
-// canary Deployments use the key "namespace/name-canary".
+// deliberately narrow — get/apply/delete for Deployments, Services,
+// HPAs and PDBs plus readiness and load metrics — so the real
+// Kubernetes client and the in-memory fake used by tests and the
+// demo share one contract. Keys are "namespace/name" (see
+// api.ModelDeployment.Key); canary Deployments use the key
+// "namespace/name-canary".
 type Cluster interface {
 	// GetDeployment returns the live Deployment for key, or false
 	// when the cluster has none.
@@ -63,6 +64,14 @@ type Cluster interface {
 	// DeleteHPA removes the HPA; deleting a missing one is not an
 	// error.
 	DeleteHPA(key string) error
+	// GetPDB returns the live PodDisruptionBudget for key, or
+	// false when the cluster has none.
+	GetPDB(key string) (render.PodDisruptionBudget, bool)
+	// ApplyPDB creates or updates the PodDisruptionBudget.
+	ApplyPDB(p render.PodDisruptionBudget) error
+	// DeletePDB removes the PodDisruptionBudget; deleting a
+	// missing one is not an error.
+	DeletePDB(key string) error
 	// ReadyReplicas reports how many pods of the Deployment at key
 	// currently pass the readiness gate (0 for a missing Deployment).
 	ReadyReplicas(key string) int32

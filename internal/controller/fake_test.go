@@ -1,6 +1,10 @@
 package controller
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Karnchoudhary-99/ml-operator/internal/render"
+)
 
 // TestFakeClusterModelLoadProbe checks the probe controls the
 // reconciler's gate reads: loading / loaded / failed transitions,
@@ -78,5 +82,60 @@ func TestFakeClusterModelLoadProbe(t *testing.T) {
 	}
 	if _, ok := cluster.Metrics("default/iris-mlp"); ok {
 		t.Fatalf("metrics survived DeleteDeployment")
+	}
+}
+
+// TestFakeClusterPDB covers the PDB surface: apply/get/delete,
+// delete of a missing PDB is a no-op, and PDBs survive a
+// snapshot/restore round-trip (the mlop CLI persists this state).
+func TestFakeClusterPDB(t *testing.T) {
+	cluster := NewFakeCluster()
+	if _, ok := cluster.GetPDB("default/iris-mlp"); ok {
+		t.Fatal("PDB exists before any apply")
+	}
+	if err := cluster.DeletePDB("default/iris-mlp"); err != nil {
+		t.Fatalf("DeletePDB of a missing PDB: %v", err)
+	}
+	pdb := render.PodDisruptionBudget{
+		Name: "iris-mlp", Namespace: "default",
+		Labels:       map[string]string{"app.kubernetes.io/name": "iris-mlp"},
+		Selector:     map[string]string{"app.kubernetes.io/name": "iris-mlp"},
+		MinAvailable: 2,
+	}
+	if err := cluster.ApplyPDB(pdb); err != nil {
+		t.Fatalf("ApplyPDB: %v", err)
+	}
+	got, ok := cluster.GetPDB("default/iris-mlp")
+	if !ok || got.MinAvailable != 2 {
+		t.Fatalf("GetPDB = %+v (ok=%v), want minAvailable 2", got, ok)
+	}
+	if cluster.PDBCount() != 1 {
+		t.Fatalf("PDBCount = %d, want 1", cluster.PDBCount())
+	}
+	pdb.MinAvailable = 1
+	if err := cluster.ApplyPDB(pdb); err != nil {
+		t.Fatalf("ApplyPDB update: %v", err)
+	}
+	got, _ = cluster.GetPDB("default/iris-mlp")
+	if got.MinAvailable != 1 {
+		t.Fatalf("updated PDB minAvailable = %d, want 1", got.MinAvailable)
+	}
+
+	snap := cluster.Snapshot()
+	restored := NewFakeCluster()
+	restored.Restore(snap)
+	got, ok = restored.GetPDB("default/iris-mlp")
+	if !ok || got.MinAvailable != 1 {
+		t.Fatalf("restored PDB = %+v (ok=%v), want minAvailable 1", got, ok)
+	}
+
+	if err := cluster.DeletePDB("default/iris-mlp"); err != nil {
+		t.Fatalf("DeletePDB: %v", err)
+	}
+	if _, ok := cluster.GetPDB("default/iris-mlp"); ok {
+		t.Fatal("PDB survived DeletePDB")
+	}
+	if cluster.PDBCount() != 0 {
+		t.Fatalf("PDBCount = %d, want 0", cluster.PDBCount())
 	}
 }
