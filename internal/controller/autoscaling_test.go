@@ -32,8 +32,8 @@ func TestReconcileAutoscalingScalesUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Actions) != 3 {
-		t.Fatalf("actions = %v, want 3 (create deployment + service + HPA)", res.Actions)
+	if len(res.Actions) != 4 {
+		t.Fatalf("actions = %v, want 4 (create deployment + service + HPA + PDB)", res.Actions)
 	}
 	if res.Actions[2].Kind != ActionCreateHPA {
 		t.Fatalf("third action = %v, want CreateHPA", res.Actions[2].Kind)
@@ -56,8 +56,11 @@ func TestReconcileAutoscalingScalesUp(t *testing.T) {
 	if live.Replicas != 4 {
 		t.Fatalf("replicas after spike = %d, want 4", live.Replicas)
 	}
-	if len(res.Actions) != 1 || res.Actions[0].Kind != ActionUpdateDeployment {
-		t.Fatalf("actions = %v, want a single UpdateDeployment", res.Actions)
+	// A scale-up moves the Deployment and the PDB together
+	// (minAvailable is replicas-1 by default, so 2 -> 4 replicas
+	// moves it 1 -> 3).
+	if len(res.Actions) != 2 || res.Actions[0].Kind != ActionUpdateDeployment || res.Actions[1].Kind != ActionUpdatePDB {
+		t.Fatalf("actions = %v, want [UpdateDeployment UpdatePDB]", res.Actions)
 	}
 	if got := rec.Metrics.Counter(metrics.MetricScaleEventsTotal, "direction", "up"); got != 1 {
 		t.Fatalf("scale-up counter = %v, want 1", got)

@@ -154,8 +154,8 @@ func TestApplyRetryDeletedCleanup(t *testing.T) {
 	if got := rec.Metrics.Counter(metrics.MetricApplyRetriesTotal, "outcome", "recovered"); got != 1 {
 		t.Fatalf("recovered retries = %v, want 1", got)
 	}
-	if len(res.Actions) != 2 { // DeleteDeployment + DeleteService
-		t.Fatalf("cleanup actions = %v, want 2 deletes", res.Actions)
+	if len(res.Actions) != 3 { // DeleteDeployment + DeleteService + DeletePDB
+		t.Fatalf("cleanup actions = %v, want 3 deletes", res.Actions)
 	}
 
 	// Exhaustion: the cleanup fails and says so.

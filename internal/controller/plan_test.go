@@ -20,8 +20,8 @@ func TestPlanFreshDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(actions) != 2 || actions[0].Kind != ActionCreateDeployment || actions[1].Kind != ActionCreateService {
-		t.Fatalf("plan = %v, want [CreateDeployment CreateService]", actions)
+	if len(actions) != 3 || actions[0].Kind != ActionCreateDeployment || actions[1].Kind != ActionCreateService || actions[2].Kind != ActionCreatePDB {
+		t.Fatalf("plan = %v, want [CreateDeployment CreateService CreatePDB]", actions)
 	}
 	// Nothing changed: the cluster is still empty and the registry
 	// status is still blank (no phase, no observed generation).
@@ -109,9 +109,9 @@ func TestPlanCanaryFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	// Stable create + canary create + service create.
-	if len(actions) != 3 {
-		t.Fatalf("plan = %v, want 3 actions", actions)
+	// Stable create + canary create + service create + PDB create.
+	if len(actions) != 4 {
+		t.Fatalf("plan = %v, want 4 actions", actions)
 	}
 	if actions[0].Kind != ActionCreateDeployment || actions[0].Key != "default/iris-mlp" {
 		t.Fatalf("first action = %+v, want CreateDeployment default/iris-mlp", actions[0])
