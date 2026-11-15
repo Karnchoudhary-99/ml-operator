@@ -165,24 +165,38 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 		return 1
 	}
 	rt := st.Restore()
+	// One bad file must not abort the whole batch: report it,
+	// keep applying the rest, and save whatever landed. The
+	// summary at the end says how many applied and how many
+	// failed, and the exit code is 1 when anything failed.
+	applied, failed := 0, 0
 	for _, f := range files {
 		d, warnings, err := loadManifest(f)
 		if err != nil {
 			fmt.Fprintf(opts.stderr, "mlop apply: %s: %v\n", f, err)
-			return 1
+			failed++
+			continue
 		}
 		line, _, err := applyDeployment(rt, d)
 		if err != nil {
 			fmt.Fprintf(opts.stderr, "mlop apply: reconcile %s: %v\n", d.Key(), err)
-			return 1
+			failed++
+			continue
 		}
 		fmt.Fprintln(opts.stdout, line)
 		for _, w := range warnings {
 			fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
 		}
+		applied++
 	}
-	if err := store.Save(opts.statePath, store.From(rt.Registry, rt.Cluster, rt.Reconciler)); err != nil {
-		fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
+	if applied > 0 {
+		if err := store.Save(opts.statePath, store.From(rt.Registry, rt.Cluster, rt.Reconciler)); err != nil {
+			fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
+			return 1
+		}
+	}
+	fmt.Fprintf(opts.stdout, "summary: %d applied, %d failed\n", applied, failed)
+	if failed > 0 {
 		return 1
 	}
 	return 0
