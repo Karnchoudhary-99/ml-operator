@@ -189,7 +189,7 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 	// summary at the end says how many applied and how many
 	// failed, and the exit code is 1 when anything failed.
 	seen := make(map[string]string)
-	applied, failed := 0, 0
+	applied, unchanged, failed := 0, 0, 0
 	for _, f := range files {
 		d, warnings, err := loadManifest(f)
 		if err != nil {
@@ -213,15 +213,21 @@ func cmdApplyDir(opts *options, dir string, dryRun bool) int {
 		for _, w := range warnings {
 			fmt.Fprintf(opts.stdout, "  warning: %s\n", w)
 		}
-		applied++
+		// The summary counts honestly: an identical re-apply is
+		// "unchanged", not "applied".
+		if strings.HasPrefix(line, "unchanged ") {
+			unchanged++
+		} else {
+			applied++
+		}
 	}
-	if applied > 0 {
+	if applied+unchanged > 0 {
 		if err := store.Save(opts.statePath, store.From(rt.Registry, rt.Cluster, rt.Reconciler)); err != nil {
 			fmt.Fprintf(opts.stderr, "mlop apply: %v\n", err)
 			return 1
 		}
 	}
-	fmt.Fprintf(opts.stdout, "summary: %d applied, %d failed\n", applied, failed)
+	fmt.Fprintf(opts.stdout, "summary: %d applied, %d unchanged, %d failed\n", applied, unchanged, failed)
 	if failed > 0 {
 		return 1
 	}
