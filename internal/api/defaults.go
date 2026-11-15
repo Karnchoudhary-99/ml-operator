@@ -82,6 +82,18 @@ func ApplyDefaults(d *ModelDeployment) {
 	if spec.Autoscaling != nil && spec.Autoscaling.MinReplicas == 0 {
 		spec.Autoscaling.MinReplicas = DefaultAutoscalingMin
 	}
+	// Availability defaults: anti-affinity on, maxSkew 1,
+	// minAvailable left at 0 so it resolves to replicas-1 at
+	// render time (see AvailabilitySpec.EffectiveMinAvailable).
+	// A nil spec takes the full default set; a partial spec keeps
+	// the user's values and fills only the unset anti-affinity
+	// flag, so `availability: {minAvailable: 1}` does not
+	// silently turn anti-affinity off.
+	if spec.Availability == nil {
+		spec.Availability = &AvailabilitySpec{AntiAffinity: boolPtr(true)}
+	} else if spec.Availability.AntiAffinity == nil {
+		spec.Availability.AntiAffinity = boolPtr(true)
+	}
 	if spec.Health.Path == "" {
 		// Framework-specific defaults: Triton serves readiness on
 		// /v2/health/ready, everything else on /healthz.
@@ -98,6 +110,10 @@ func ApplyDefaults(d *ModelDeployment) {
 		spec.Health.PeriodSeconds = DefaultHealthPeriod
 	}
 }
+
+// boolPtr returns a pointer to v, for defaulting optional booleans
+// (AvailabilitySpec.AntiAffinity) without a named variable.
+func boolPtr(v bool) *bool { return &v }
 
 // defaultGate returns g with every zero threshold filled from the
 // operator defaults, or a fresh default gate when g is nil. A

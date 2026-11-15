@@ -78,6 +78,12 @@ type ModelDeploymentSpec struct {
 	BlueGreen *BlueGreenSpec
 	// Autoscaling enables the HorizontalPodAutoscaler for this model.
 	Autoscaling *AutoscalingSpec
+	// Availability configures how the operator keeps the model
+	// serving through voluntary disruptions (node drains,
+	// upgrades) and spreads its pods across nodes. Nil means the
+	// operator defaults: anti-affinity on, maxSkew 1, minAvailable
+	// replicas-1.
+	Availability *AvailabilitySpec
 	// Env holds extra environment variables for the model container.
 	Env map[string]string
 	// Health configures the readiness gate for the model container.
@@ -157,6 +163,62 @@ type GateSpec struct {
 	// MinReadyRatio is the minimum ready/desired canary replicas
 	// (0-1). 0 means the default (1.0, every canary pod ready).
 	MinReadyRatio float64
+}
+
+// AvailabilitySpec configures how the operator keeps a model
+// serving through voluntary disruptions and spreads its pods
+// across failure domains.
+type AvailabilitySpec struct {
+	// MinAvailable is the number of pods that must stay available
+	// during a voluntary disruption (node drain, upgrade). 0
+	// means the default: one fewer than the replica count
+	// (replicas-1), so a single pod can always be drained. It
+	// must stay below the replica count: minAvailable equal to
+	// the replica count would block every eviction. An explicit
+	// 0 is the same as unset — the default applies — because a
+	// deployment with one replica already resolves to 0.
+	MinAvailable int32
+	// AntiAffinity, when true, keeps pods of one deployment off
+	// the same node (preferred pod anti-affinity on the hostname
+	// topology key). Nil means the default (true). A deployment
+	// with one replica has nothing to spread, so the rendered
+	// Deployment omits the rule either way.
+	AntiAffinity *bool
+	// MaxSkew is the topology-spread maxSkew: the most pods any
+	// one node may hold above the least-loaded node. 0 means the
+	// default (1, an even spread). A single-replica deployment
+	// renders no spread constraint.
+	MaxSkew int32
+}
+
+// EffectiveMinAvailable resolves MinAvailable against the replica
+// count: an explicit value wins, 0 means replicas-1, floored at 0
+// (a single replica has nothing to protect).
+func (a *AvailabilitySpec) EffectiveMinAvailable(replicas int32) int32 {
+	if a != nil && a.MinAvailable != 0 {
+		return a.MinAvailable
+	}
+	if replicas <= 1 {
+		return 0
+	}
+	return replicas - 1
+}
+
+// AntiAffinityEnabled reports whether pod anti-affinity applies:
+// the default is on, an explicit false turns it off.
+func (a *AvailabilitySpec) AntiAffinityEnabled() bool {
+	if a == nil || a.AntiAffinity == nil {
+		return true
+	}
+	return *a.AntiAffinity
+}
+
+// EffectiveMaxSkew resolves MaxSkew: 0 means the default (1).
+func (a *AvailabilitySpec) EffectiveMaxSkew() int32 {
+	if a == nil || a.MaxSkew == 0 {
+		return 1
+	}
+	return a.MaxSkew
 }
 
 // AutoscalingSpec configures horizontal autoscaling for the model.
