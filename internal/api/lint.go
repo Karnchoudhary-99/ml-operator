@@ -38,6 +38,7 @@ func Lint(d *ModelDeployment) []string {
 	if spec.Autoscaling != nil && spec.Autoscaling.MinReplicas == 0 {
 		add("spec.autoscaling.minReplicas is 0, but the operator raises it to 1: this is not scale-to-zero")
 	}
+	warns = append(warns, lintAvailability(spec)...)
 	if spec.Strategy == StrategyCanary && spec.Canary != nil {
 		if spec.Canary.Weight > 50 {
 			add("spec.canary.weight is %d%%: the first canary step sends most traffic to an unproven revision", spec.Canary.Weight)
@@ -80,6 +81,31 @@ func lintImage(image string) []string {
 		return []string{fmt.Sprintf("spec.model.image %q uses the :latest tag; two different binaries can share it, so rollouts and rollbacks cannot tell versions apart", image)}
 	}
 	return nil
+}
+
+// lintAvailability warns about availability choices that leave a
+// multi-replica model exposed to a single node loss. An unset
+// availability block is clean: ApplyDefaults turns anti-affinity
+// on and maxSkew to 1, so only explicit choices warn.
+func lintAvailability(spec ModelDeploymentSpec) []string {
+	a := spec.Availability
+	if a == nil {
+		return nil
+	}
+	var warns []string
+	replicas := int32(1)
+	if spec.Replicas != nil {
+		replicas = *spec.Replicas
+	}
+	if a.AntiAffinity != nil && !*a.AntiAffinity && replicas > 1 {
+		warns = append(warns, fmt.Sprintf(
+			"spec.availability.antiAffinity is false with %d replicas: pods of one model may land on a single node, so one node loss takes the whole model down", replicas))
+	}
+	if a.MaxSkew > 1 && replicas > 1 && a.MaxSkew >= replicas {
+		warns = append(warns, fmt.Sprintf(
+			"spec.availability.maxSkew is %d with %d replicas: the spread constraint allows every pod on one node", a.MaxSkew, replicas))
+	}
+	return warns
 }
 
 // lintGate warns about a gate that can promote a rollout before

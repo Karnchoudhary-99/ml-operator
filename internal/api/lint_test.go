@@ -73,6 +73,19 @@ func TestLint(t *testing.T) {
 		{"empty image is a validation error, not a lint warning", func(d *ModelDeployment) {
 			d.Spec.Model.Image = ""
 		}, ""},
+		{"anti-affinity off with replicas", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{AntiAffinity: boolPtr(false)}
+		}, "antiAffinity is false with 2 replicas"},
+		{"anti-affinity off with one replica is fine", func(d *ModelDeployment) {
+			d.Spec.Replicas = int32p(1)
+			d.Spec.Availability = &AvailabilitySpec{AntiAffinity: boolPtr(false)}
+		}, ""},
+		{"maxSkew allows all pods on one node", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{MaxSkew: 2}
+		}, "allows every pod on one node"},
+		{"maxSkew 1 is fine", func(d *ModelDeployment) {
+			d.Spec.Availability = &AvailabilitySpec{MaxSkew: 1}
+		}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
