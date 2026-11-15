@@ -152,6 +152,25 @@ another to wait for the rollout to land. Scripts should check the
 exit code, not parse the text: 0 is Available, 1 is a failure
 (Failed or Degraded), 2 is the timeout expiring first.
 
+## Applying a directory of manifests
+
+```bash
+mlop apply -d examples/multi-model            # every .yaml/.yml/.json in filename order
+mlop apply -d examples/multi-model --dry-run   # validate all, touch no state
+```
+
+A batch loads state once and saves once at the end. One bad file
+does not abort the batch: it is reported, the rest still apply,
+and the run ends with `summary: N applied, M unchanged, K failed`
+and exit 1 when anything failed. Two files defining the same
+deployment key in one directory are rejected as a duplicate (the
+second file is named with the first); re-applying a key that
+already exists in state is still fine — that is a normal
+generation bump. Files that are not manifests are ignored, so a
+README can live next to the manifests. `examples/batch-tour.sh`
+drives it end to end: dry-run, apply, re-apply, then
+`mlop watch --all` for both models.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a

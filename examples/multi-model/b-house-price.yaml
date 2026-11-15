@@ -1,0 +1,20 @@
+# Second model in the multi-model batch: the house-price regressor, one replica.
+name: house-price
+namespace: default
+spec:
+  model:
+    image: registry.example.com/house-price:v1
+    framework: onnx
+    version: v1
+  replicas: 1
+  resources:
+    cpuRequest: 250m
+    cpuLimit: 500m
+    memoryRequest: 256Mi
+    memoryLimit: 512Mi
+  port: 8080
+  strategy: RollingUpdate
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
