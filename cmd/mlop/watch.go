@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"time"
@@ -24,6 +25,7 @@ func cmdWatch(opts *options, args []string) int {
 	}
 	interval := fs.Duration("interval", time.Second, "how often to reconcile and re-check the phase")
 	timeout := fs.Duration("timeout", 5*time.Minute, "give up after this long without a terminal phase")
+	jsonOut := fs.Bool("json", false, "print one JSON object per phase transition instead of text")
 	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		return 2
 	}
@@ -55,7 +57,21 @@ func cmdWatch(opts *options, args []string) int {
 	// Poll on the configured interval until the timeout: long
 	// enough for a canary step to advance by default, short
 	// enough to fail loudly instead of hanging a script forever.
-	deadline := time.Now().Add(*timeout)
+	// watchEvent is one line of `mlop watch --json`: a single
+	// object per phase transition, so a script can jq the stream
+	// instead of parsing human text.
+	type watchEvent struct {
+		Name      string    `json:"name"`
+		Namespace string    `json:"namespace"`
+		Phase     api.Phase `json:"phase"`
+		Ready     int32     `json:"ready"`
+		Desired   int32     `json:"desired"`
+		Message   string    `json:"message"`
+		Elapsed   string    `json:"elapsed"`
+	}
+
+	start := time.Now()
+	deadline := start.Add(*timeout)
 	// Print only when the phase changes: a steady Progressing
 	// deployment would otherwise spam one line per second for
 	// minutes. The first snapshot always prints.
@@ -73,9 +89,23 @@ func cmdWatch(opts *options, args []string) int {
 		}
 		d := rt.Registry.Get(key).Deployment
 		if first || res.Phase != lastPhase {
-			fmt.Fprintf(opts.stdout, "%s %s: %s %d/%d ready\n",
-				time.Now().Format("15:04:05"), key, res.Phase,
-				d.Status.ReadyReplicas, desiredReplicas(d))
+			if *jsonOut {
+				ev := watchEvent{
+					Name: d.Name, Namespace: namespaceOf(d),
+					Phase: res.Phase, Ready: d.Status.ReadyReplicas,
+					Desired: desiredReplicas(d), Message: d.Status.Message,
+					Elapsed: time.Since(start).Round(time.Millisecond).String(),
+				}
+				enc := json.NewEncoder(opts.stdout)
+				if err := enc.Encode(ev); err != nil {
+					fmt.Fprintf(opts.stderr, "mlop watch: %v\n", err)
+					return 1
+				}
+			} else {
+				fmt.Fprintf(opts.stdout, "%s %s: %s %d/%d ready\n",
+					time.Now().Format("15:04:05"), key, res.Phase,
+					d.Status.ReadyReplicas, desiredReplicas(d))
+			}
 			first = false
 			lastPhase = res.Phase
 		}
