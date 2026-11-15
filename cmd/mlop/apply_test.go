@@ -141,6 +141,33 @@ func TestApplyDirErrors(t *testing.T) {
 	}
 }
 
+// TestApplyDirUsageErrors covers the directory edge cases: a
+// missing directory, a directory with no manifests, and -f with -d
+// together.
+func TestApplyDirUsageErrors(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	code, _, errOut := runCLIState(t, state, "apply", "-d", missing)
+	if code == 0 || !strings.Contains(errOut, "read directory") {
+		t.Fatalf("apply -d missing dir exit %d, err %q", code, errOut)
+	}
+	empty := writeManifestDir(t, map[string]string{"README.txt": "no manifests here\n"})
+	code, _, errOut = runCLIState(t, state, "apply", "-d", empty)
+	if code == 0 || !strings.Contains(errOut, "no manifest files") {
+		t.Fatalf("apply -d empty dir exit %d, err %q", code, errOut)
+	}
+	manifest := writeManifest(t, irisV1)
+	code, _, errOut = runCLIState(t, state, "apply", "-f", manifest, "-d", empty)
+	if code == 0 || !strings.Contains(errOut, "mutually exclusive") {
+		t.Fatalf("apply -f -d exit %d, err %q", code, errOut)
+	}
+	// A dry-run over an empty directory fails the same way.
+	code, _, errOut = runCLIState(t, state, "apply", "-d", empty, "--dry-run")
+	if code == 0 || !strings.Contains(errOut, "no manifest files") {
+		t.Fatalf("apply -d --dry-run empty dir exit %d, err %q", code, errOut)
+	}
+}
+
 func TestApplyDirDryRun(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 	dir := writeManifestDir(t, map[string]string{
