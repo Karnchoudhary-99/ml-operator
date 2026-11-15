@@ -5,6 +5,53 @@ All commands share one simulated world in the state file
 (`~/.mlop/state.json`, or `--state` / `$MLOP_STATE`); separate
 invocations share it, and deleting it resets the world.
 
+## Installing on a cluster
+
+The operator installs on a real cluster from generated manifests
+(`mlop crd` and `mlop install`, both read-only — they print YAML
+and touch no state):
+
+```bash
+mlop crd | kubectl apply -f -        # CustomResourceDefinition
+mlop install | kubectl apply -f -    # Namespace + RBAC + operator Deployment
+kubectl get mldep                     # Phase / Ready / Age columns
+```
+
+The operator lands in `ml-operator-system` and watches the
+`default` namespace for ModelDeployments; override either with
+`mlop install --namespace team-ml`, and the image with
+`--image registry.example.com/ml-operator:v0.2.0`. The checked-in
+copies live in `examples/crd.yaml` and `examples/install.yaml`
+— apply those directly if you prefer files over pipes, and
+regenerate them (`mlop crd > examples/crd.yaml`,
+`mlop install > examples/install.yaml`) after any schema or
+install change; the golden tests fail the suite if they drift.
+
+Check the install before deploying a model:
+
+```bash
+kubectl -n ml-operator-system get pods   # operator Running, /healthz live
+kubectl get crd modeldeployments.ml.example.com
+```
+
+Then deploy a model. The cluster takes the Kubernetes shape of
+the same manifest — `apiVersion: ml.example.com/v1alpha1`,
+`kind: ModelDeployment`, `metadata.name`, `spec` — not the
+`name:`/`spec:` shorthand `mlop apply` reads
+(`examples/iris-mlp.yaml`); `examples/iris-mlp-k8s.yaml` is that
+shape for the same model:
+
+```bash
+kubectl apply -f examples/iris-mlp-k8s.yaml
+kubectl get mldep iris-mlp               # Phase, Ready, Age
+```
+
+Note the honest limit: the reconciler behind the installed
+operator still runs against the simulated cluster (see the
+roadmap), so a cluster install today proves the CRD, RBAC and
+operator packaging — it does not yet reconcile real Deployments.
+That is the controller-runtime phase.
+
 ## Deploying a new model version
 
 Preview first, then apply — `diff` never changes state:
