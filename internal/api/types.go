@@ -93,7 +93,10 @@ type ModelDeploymentSpec struct {
 	// invocation and picks up any spec change that landed while
 	// paused. Pausing mid-rollout freezes the rollout state, so
 	// a canary or blue-green rollout resumes from where it
-	// stopped instead of restarting.
+	// stopped instead of restarting. Apply replaces the whole
+	// spec, so a manifest without paused resumes the deployment
+	// (absent means false) — to change the spec while staying
+	// paused, the manifest must set paused: true.
 	Paused bool
 	// Env holds extra environment variables for the model container.
 	Env map[string]string
