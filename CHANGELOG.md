@@ -8,6 +8,14 @@ the first public version is cut.
 
 ### Added
 
+- Drift repair — `mlop repair <name> | mlop repair --all
+  [--dry-run] [--json]`, the write half of drift: it re-applies
+  the desired state to drifted and missing objects using the same
+  apply plan the reconciler uses, then re-checks drift to verify.
+  It never deletes unexpected objects (reported as left as-is),
+  refuses paused deployments, and never advances a rollout; a
+  dry run exits 1 when it would repair something, so it gates CI
+  like drift does.
 - Drift detection — `mlop drift <name> | mlop drift --all
   [--json]`, exit 0 in sync / 1 drift found / 2 usage error;
   per-object verdicts (in sync / drifted / missing / unexpected)

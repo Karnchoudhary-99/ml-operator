@@ -38,6 +38,7 @@ with the desired state.
 - [x] Pause / resume reconciliation (`spec.paused`, `mlop pause` / `mlop resume`)
 - [x] Shell completion for `mlop` (bash, zsh, fish — `mlop completion`)
 - [x] Drift detection (`mlop drift`, exit-code CI gate — `internal/controller/drift.go`)
+- [x] Drift repair (`mlop repair`, restores drifted/missing objects, never deletes unexpected ones — `internal/controller/repair.go`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -144,11 +145,27 @@ mlop drift iris-mlp
 
 A drifted object is fixed by re-applying the manifest — or, when
 the live change was the intended one, by updating the manifest to
-match. During a canary or blue-green rollout the fields the rollout
-itself is moving are not reported as drift, and a paused deployment
-carries a note that nothing will correct the drift until resume.
+match. `mlop repair` does the first for you, object by object:
+
+```bash
+mlop repair iris-mlp
+# repaired: default/iris-mlp
+#   repaired Deployment default/iris-mlp: image "registry.example.com/iris-mlp:v99" -> "registry.example.com/iris-mlp:v1"
+#   repaired Service default/iris-mlp: service does not exist
+```
+
+Repair never deletes: an unexpected object is reported as left
+as-is (delete it yourself, or let a reconcile own the decision),
+and a paused deployment is refused outright. `--dry-run` reports
+what would change and exits 1 when it would repair something, so
+it gates CI like `mlop drift` does. During a canary or blue-green
+rollout the fields the rollout itself is moving are not reported as
+drift, and a paused deployment carries a note that nothing will
+correct the drift until resume.
 `examples/drift-tour.sh` walks through an image swap, a deleted
-Service, and a manual scale-down, each caught and then fixed.
+Service, and a manual scale-down, each caught and then fixed;
+`examples/repair-tour.sh` walks the same loop through `mlop repair`,
+including a leftover canary that repair reports and leaves standing.
 
 Manifests are YAML (the shape in `examples/iris-mlp.yaml`) or JSON
 with the same keys. The parser is a small subset — nested maps,
@@ -318,13 +335,13 @@ cluster until the controller-runtime phase).
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `drift`, `status`, `logs`, `history`, `rollout`, `ready`, `load`, `rollback`, `pause`, `resume`, `watch`, `backup`, `restore`, `crd`, `install`, `completion`, `version`)
+- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `drift`, `repair`, `status`, `logs`, `history`, `rollout`, `ready`, `load`, `rollback`, `pause`, `resume`, `watch`, `backup`, `restore`, `crd`, `install`, `completion`, `version`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
 - `internal/autoscale` — HPA decision from CPU / request-rate / GPU signals
 - `internal/backup` — state backup + restore (checksummed)
 - `internal/completion` — shell completion scripts (bash, zsh, fish)
 - `internal/config` — operator configuration (file + env + flags)
-- `internal/controller` — reconciler (diff, drift, apply plan, rollout)
+- `internal/controller` — reconciler (diff, drift, repair, apply plan, rollout)
 - `internal/crd` — CRD + install manifest generation (no external deps)
 - `internal/history` — deployment history audit trail
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
