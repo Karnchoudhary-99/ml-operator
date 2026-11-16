@@ -8,7 +8,7 @@
 //
 //	mlop [--state path] <command> [args]
 //
-// Commands: apply, validate, diff, status, logs, history, rollout, ready, load, rollback, backup, restore, crd, install, version.
+// Commands: apply, validate, diff, status, logs, history, rollout, ready, load, rollback, pause, resume, watch, backup, restore, crd, install, completion, version.
 package main
 
 import (
@@ -86,6 +86,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdCRD(opts, rest[1:])
 	case "install":
 		return cmdInstall(opts, rest[1:])
+	case "completion":
+		return cmdCompletion(opts, rest[1:])
+	case "__complete-names":
+		return cmdCompleteNames(opts, rest[1:])
 	case "version":
 		fmt.Fprintf(stdout, "mlop %s\n", version)
 		return 0
@@ -124,6 +128,7 @@ Commands:
   restore <file> [--force]             verify a backup and restore state from it
   crd                                    print the ModelDeployment CustomResourceDefinition
   install [--namespace N] [--image I]    print the operator install bundle (Namespace, RBAC, Deployment)
+  completion <bash|zsh|fish>             print a shell completion script
   version                              print mlop version
 
 State:

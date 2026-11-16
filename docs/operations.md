@@ -342,6 +342,16 @@ safe to run. Deleting the state file resets everything — the
 manifests are the source of truth, so re-applying them rebuilds
 the world.
 
+**Shell completion offers nothing (or stale names).** The scripts
+call bare `mlop` — check that the `mlop` on your `PATH` is the one
+you built (`which mlop`, `mlop version`). Names come from the
+state file, so a completion that offers nothing usually means the
+shell is reading a different state file than the one you applied
+to: check `--state` / `$MLOP_STATE` (run `mlop __complete-names`
+directly — it prints exactly what the shell sees). After
+rebuilding mlop, re-source the script; the installed copy is a
+snapshot, not a link to the binary.
+
 ## Pre-flight checklist (before every apply)
 
 1. `mlop validate -f <manifest>` — errors fail, warnings are listed;
@@ -378,14 +388,34 @@ logged to stderr and retried on the next tick; it never kills the
 operator. Set the interval to `0` to disable the resync, and the
 metrics address to `""` to disable the metrics endpoint.
 
+## Shell completion
+
+`mlop completion <bash|zsh|fish>` prints a completion script for
+your shell. It is generated from the CLI's own command table
+(internal/completion), so it stays in step with the commands as
+they evolve. It completes command names, per-command flags, files
+for `-f`/`-d`, and deployment names — live, from the state file —
+and `rollout` completes its `status` subcommand first.
+
+```bash
+mlop completion bash | sudo tee /etc/bash_completion.d/mlop   # system-wide
+source <(mlop completion bash)                                # this shell only
+mlop completion zsh > "${fpath[1]}/_mlop"                     # then compinit
+mlop completion fish > ~/.config/fish/completions/mlop.fish
+```
+
+If names do not complete, see the troubleshooting entry above —
+the usual cause is a different `mlop` on `PATH` or a different
+state file than the one you applied to.
+
 ## End-to-end tours
 
-The nine scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The ten scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
 ready, canary or blue-green rollout, rollback, pause/resume,
-backup/restore, batch apply, hardening) and asserts the output at
+backup/restore, batch apply, hardening, shell completion) and asserts the output at
 every step, so a tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all nine on
+(`examples/mlop-tour.sh`) or all of them; CI runs all ten on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`
