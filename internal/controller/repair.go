@@ -114,9 +114,13 @@ func (rep DeploymentRepair) Failed() int {
 
 // AllFixed is true when nothing is left unrepaired and nothing
 // failed: every drifted or missing object is back in sync and no
-// unexpected object is still standing. A dry run reports the same
-// verdict for what would be fixed.
+// unexpected object is still standing. On a dry run it is false
+// whenever something would have been repaired, so the command
+// exits 1 and works as a CI gate — the same as `mlop drift`.
 func (rep DeploymentRepair) AllFixed() bool {
+	if rep.DryRun && rep.Fixed() > 0 {
+		return false
+	}
 	return rep.Left() == 0 && rep.Failed() == 0
 }
 

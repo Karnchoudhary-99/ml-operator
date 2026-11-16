@@ -115,8 +115,10 @@ func printRepairReport(opts *options, rep controller.DeploymentRepair) {
 	fmt.Fprintf(opts.stdout, "%s: %s\n", verb, rep.Deployment)
 	for _, res := range rep.Results {
 		switch res.Outcome {
-		case controller.RepairFixed, controller.RepairWouldFix:
+		case controller.RepairFixed:
 			fmt.Fprintf(opts.stdout, "  repaired %s %s: %s\n", res.Kind, res.Key, res.Detail)
+		case controller.RepairWouldFix:
+			fmt.Fprintf(opts.stdout, "  would repair %s %s: %s\n", res.Kind, res.Key, res.Detail)
 		case controller.RepairLeft:
 			fmt.Fprintf(opts.stdout, "  left %s %s (%s): %s\n", res.Kind, res.Key, res.Was, res.Detail)
 		case controller.RepairFailed:
