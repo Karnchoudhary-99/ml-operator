@@ -156,6 +156,14 @@ cluster every time, and applies only the difference:
 `Reconciler.Plan` runs steps 1–4 only and returns the plan without
 changing anything — no cluster writes, no status writes, no metrics,
 no events, no scaler or rollout state. `mlop diff` is built on it.
+`Reconciler.Drift` runs the same desired-state computation and
+diffs it per managed object instead of turning it into actions:
+each Deployment, Service, HPA and PodDisruptionBudget is reported
+as in sync, drifted (with one reason per moved field), missing, or
+unexpected (present although nothing desires it). `mlop drift` is
+built on it — the read-only half of the plan, for the human who
+changed something out of band and wants to know what moved before
+deciding whether to re-apply or to update the manifest.
 
 ## Rollout state machine
 
