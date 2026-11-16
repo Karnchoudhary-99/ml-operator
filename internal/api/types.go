@@ -84,6 +84,17 @@ type ModelDeploymentSpec struct {
 	// operator defaults: anti-affinity on, maxSkew 1, minAvailable
 	// replicas-1.
 	Availability *AvailabilitySpec
+	// Security configures the pod- and container-level security
+	// context the operator renders onto every serving
+	// Deployment (stable, canary and green alike — security is
+	// a property of the model, not of one revision). Nil means
+	// the operator defaults: non-root uid 10001, read-only root
+	// filesystem, no privilege escalation, all Linux
+	// capabilities dropped, RuntimeDefault seccomp. A model
+	// server that needs to write to its root filesystem or run
+	// as root must say so explicitly, and `mlop validate` warns
+	// about every relaxation.
+	Security *SecuritySpec
 	// Paused suspends reconciliation for this deployment: while
 	// true the operator makes no cluster changes, advances no
 	// rollout, and applies no autoscaling decision — the live
@@ -233,6 +244,107 @@ func (a *AvailabilitySpec) EffectiveMaxSkew() int32 {
 		return 1
 	}
 	return a.MaxSkew
+}
+
+// SecuritySpec configures the pod- and container-level security
+// context for a model's serving pods. Every field is optional:
+// a nil field takes the operator default, so a manifest that
+// says nothing about security still gets the hardened set.
+// Pointer booleans (rather than plain bools) are what let the
+// operator tell "the author explicitly relaxed this" from "the
+// author said nothing" — `mlop validate` warns about the former
+// and stays silent about the latter.
+type SecuritySpec struct {
+	// RunAsNonRoot, when true, makes the kubelet refuse to
+	// start the pod if any container would run as uid 0. Nil
+	// means the default (true).
+	RunAsNonRoot *bool
+	// RunAsUser is the uid every container runs as. Nil means
+	// the default (10001, a non-root uid with no host meaning).
+	// 0 is only legal when RunAsNonRoot is explicitly false:
+	// asking for a root container that the kubelet must refuse
+	// is a contradiction, and Validate rejects it.
+	RunAsUser *int64
+	// ReadOnlyRootFilesystem, when true, mounts the container's
+	// root filesystem read-only: a compromised model server
+	// cannot write its own binary or drop a persistence file.
+	// Nil means the default (true). A server that needs a
+	// scratch directory should mount an emptyDir volume
+	// instead — that is future work, not a reason to relax this.
+	ReadOnlyRootFilesystem *bool
+	// AllowPrivilegeEscalation, when true, lets a process gain
+	// more privileges than its parent (e.g. via a setuid
+	// binary). Nil means the default (false).
+	AllowPrivilegeEscalation *bool
+	// DropCapabilities lists the Linux capabilities removed
+	// from the container's bounding set. Nil or empty means the
+	// default (["ALL"] — drop everything, add nothing back).
+	// An explicit list replaces the default entirely, so a
+	// server that needs NET_BIND_SERVICE lists exactly that
+	// and nothing else.
+	DropCapabilities []string
+	// SeccompProfile is the seccomp profile applied to the pod:
+	// "RuntimeDefault", "Unconfined", or "Localhost/<path>".
+	// Empty means the default ("RuntimeDefault").
+	SeccompProfile string
+}
+
+// RunAsNonRootEnabled reports whether the pod refuses to run as
+// root: the default is on, an explicit false turns it off.
+func (s *SecuritySpec) RunAsNonRootEnabled() bool {
+	if s == nil || s.RunAsNonRoot == nil {
+		return true
+	}
+	return *s.RunAsNonRoot
+}
+
+// EffectiveRunAsUser resolves RunAsUser: nil means the default
+// (10001).
+func (s *SecuritySpec) EffectiveRunAsUser() int64 {
+	if s == nil || s.RunAsUser == nil {
+		return DefaultRunAsUser
+	}
+	return *s.RunAsUser
+}
+
+// ReadOnlyRootFilesystemEnabled reports whether the container's
+// root filesystem is read-only: the default is on, an explicit
+// false turns it off.
+func (s *SecuritySpec) ReadOnlyRootFilesystemEnabled() bool {
+	if s == nil || s.ReadOnlyRootFilesystem == nil {
+		return true
+	}
+	return *s.ReadOnlyRootFilesystem
+}
+
+// AllowPrivilegeEscalationEnabled reports whether a process may
+// gain privileges: the default is off, an explicit true turns
+// it on.
+func (s *SecuritySpec) AllowPrivilegeEscalationEnabled() bool {
+	if s == nil || s.AllowPrivilegeEscalation == nil {
+		return false
+	}
+	return *s.AllowPrivilegeEscalation
+}
+
+// EffectiveDropCapabilities resolves DropCapabilities: nil or
+// empty means the default (drop ALL).
+func (s *SecuritySpec) EffectiveDropCapabilities() []string {
+	if s == nil || len(s.DropCapabilities) == 0 {
+		return []string{"ALL"}
+	}
+	out := make([]string, len(s.DropCapabilities))
+	copy(out, s.DropCapabilities)
+	return out
+}
+
+// EffectiveSeccompProfile resolves SeccompProfile: empty means
+// the default ("RuntimeDefault").
+func (s *SecuritySpec) EffectiveSeccompProfile() string {
+	if s == nil || s.SeccompProfile == "" {
+		return DefaultSeccompProfile
+	}
+	return s.SeccompProfile
 }
 
 // AutoscalingSpec configures horizontal autoscaling for the model.

@@ -8,6 +8,15 @@ the first public version is cut.
 
 ### Added
 
+- Pod security hardening — `spec.security`, hardened by default:
+  non-root uid 10001, read-only root filesystem, no privilege
+  escalation, all Linux capabilities dropped, RuntimeDefault
+  seccomp, rendered onto the stable, canary and green Deployments
+  alike. An explicit block overrides per field; `mlop validate`
+  warns about every relaxation, `--strict` turns warnings into
+  failures, and a contradiction (uid 0 with runAsNonRoot on) is
+  rejected at apply time. `mlop status` shows the effective values
+  and `mlop diff` names each moved field.
 - Drift repair — `mlop repair <name> | mlop repair --all
   [--dry-run] [--json]`, the write half of drift: it re-applies
   the desired state to drifted and missing objects using the same

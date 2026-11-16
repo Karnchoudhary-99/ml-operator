@@ -300,6 +300,33 @@ minAvailable, scale down to one replica deletes the PDB, and
 deleting the deployment removes it with the rest of its objects.
 `examples/hardening-tour.sh` drives all of it end to end.
 
+## Pod security
+
+Every serving Deployment is hardened by default — no manifest block
+needed: pods run as non-root uid 10001, the container's root
+filesystem is read-only, privilege escalation is off, all Linux
+capabilities are dropped, and the pod runs under the RuntimeDefault
+seccomp profile. The context renders onto the stable, canary and
+green Deployments alike, so a rollout never silently drops it.
+Override it per deployment with `spec.security`
+(`examples/iris-mlp-secured.yaml`): `runAsUser` picks the uid,
+`dropCapabilities` lists exactly the capabilities to drop (an
+explicit list replaces the default `["ALL"]`; the YAML dialect has
+no lists, so it is a comma-separated string there and a real array
+in JSON manifests), `seccompProfile` is `RuntimeDefault`,
+`Unconfined`, or `Localhost/<profile>`.
+
+Relaxations are allowed but never silent: `mlop validate` warns
+about every one (`runAsNonRoot: false`, `readOnlyRootFilesystem:
+false`, `allowPrivilegeEscalation: true`, `seccompProfile:
+Unconfined`, an empty capability list), and `--strict` turns the
+warnings into failures for CI. A contradiction is rejected at
+apply time: `runAsUser: 0` with `runAsNonRoot: true` would make the
+kubelet refuse to start the pod, so the operator refuses the
+manifest instead. `mlop status <name>` shows the effective values
+and `mlop diff` names each moved field before it applies.
+`examples/security-tour.sh` drives all of it end to end.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a

@@ -31,6 +31,26 @@ type Probe struct {
 	PeriodSeconds       int32
 }
 
+// PodSecurityContext is the pod-level security context rendered
+// onto a Deployment's pod template: the uid every container runs
+// as, whether the kubelet must refuse root, and the seccomp
+// profile. It travels with the pod template, so canary and green
+// Deployments inherit it from DeploymentFor.
+type PodSecurityContext struct {
+	RunAsNonRoot   bool
+	RunAsUser      int64
+	SeccompProfile string // "RuntimeDefault", "Unconfined", "Localhost/<path>"
+}
+
+// SecurityContext is the container-level security context for
+// the model container: a read-only root filesystem, no privilege
+// escalation, and the dropped Linux capabilities.
+type SecurityContext struct {
+	ReadOnlyRootFilesystem   bool
+	AllowPrivilegeEscalation bool
+	DropCapabilities         []string
+}
+
 // Container is the model-serving container of a rendered Deployment.
 type Container struct {
 	Name           string
@@ -42,6 +62,7 @@ type Container struct {
 	MemoryRequest  string
 	MemoryLimit    string
 	ReadinessProbe Probe
+	Security       SecurityContext
 }
 
 // Deployment is the rendered serving Deployment for a model.
@@ -66,6 +87,12 @@ type Deployment struct {
 	// topology key). Off only when the spec explicitly disables
 	// it — the operator default is on.
 	AntiAffinity bool
+	// PodSecurity is the pod-level security context rendered
+	// onto the pod template. Security is a property of the
+	// model, not of one revision: canary and green Deployments
+	// inherit it from DeploymentFor, so a rollout never
+	// silently drops the hardening.
+	PodSecurity PodSecurityContext
 	// TopologySpread holds the topology-spread constraints for
 	// the pod template; empty when the Deployment has a single
 	// replica (nothing to spread).
@@ -179,6 +206,15 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 		Selector:  deploymentSelector(d, "false", "false"),
 		Canary:    false,
 		Container: containerFor(d),
+		// Security resolves through the Effective* helpers, so a
+		// spec that was never defaulted still renders the
+		// hardened set rather than a zero value (root uid 0,
+		// writable rootfs) — the safe direction.
+		PodSecurity: PodSecurityContext{
+			RunAsNonRoot:   d.Spec.Security.RunAsNonRootEnabled(),
+			RunAsUser:      d.Spec.Security.EffectiveRunAsUser(),
+			SeccompProfile: d.Spec.Security.EffectiveSeccompProfile(),
+		},
 	}
 	// Hardening travels with the pod template: anti-affinity and
 	// the spread constraint apply to canary and green Deployments
@@ -417,6 +453,29 @@ func DeploymentDiffReasons(desired, live Deployment) []string {
 	if !topologySpreadEqual(desired.TopologySpread, live.TopologySpread) {
 		reasons = append(reasons, "topology spread changed")
 	}
+	// Security is rendered onto every Deployment, so a security
+	// change is a Deployment change: the reconciler re-applies
+	// and `mlop diff` names it, instead of the drift check
+	// silently reporting the Deployment in sync.
+	if desired.PodSecurity.RunAsNonRoot != live.PodSecurity.RunAsNonRoot {
+		reasons = append(reasons, fmt.Sprintf("runAsNonRoot %v -> %v", live.PodSecurity.RunAsNonRoot, desired.PodSecurity.RunAsNonRoot))
+	}
+	if desired.PodSecurity.RunAsUser != live.PodSecurity.RunAsUser {
+		reasons = append(reasons, fmt.Sprintf("runAsUser %d -> %d", live.PodSecurity.RunAsUser, desired.PodSecurity.RunAsUser))
+	}
+	if desired.PodSecurity.SeccompProfile != live.PodSecurity.SeccompProfile {
+		reasons = append(reasons, fmt.Sprintf("seccompProfile %q -> %q", live.PodSecurity.SeccompProfile, desired.PodSecurity.SeccompProfile))
+	}
+	dc, lc := desired.Container.Security, live.Container.Security
+	if dc.ReadOnlyRootFilesystem != lc.ReadOnlyRootFilesystem {
+		reasons = append(reasons, fmt.Sprintf("readOnlyRootFilesystem %v -> %v", lc.ReadOnlyRootFilesystem, dc.ReadOnlyRootFilesystem))
+	}
+	if dc.AllowPrivilegeEscalation != lc.AllowPrivilegeEscalation {
+		reasons = append(reasons, fmt.Sprintf("allowPrivilegeEscalation %v -> %v", lc.AllowPrivilegeEscalation, dc.AllowPrivilegeEscalation))
+	}
+	if !stringSliceEqual(dc.DropCapabilities, lc.DropCapabilities) {
+		reasons = append(reasons, "dropCapabilities changed")
+	}
 	return reasons
 }
 
@@ -456,10 +515,28 @@ func containerFor(d api.ModelDeployment) Container {
 			InitialDelaySeconds: d.Spec.Health.InitialDelaySeconds,
 			PeriodSeconds:       d.Spec.Health.PeriodSeconds,
 		},
+		Security: SecurityContext{
+			ReadOnlyRootFilesystem:   d.Spec.Security.ReadOnlyRootFilesystemEnabled(),
+			AllowPrivilegeEscalation: d.Spec.Security.AllowPrivilegeEscalationEnabled(),
+			DropCapabilities:         d.Spec.Security.EffectiveDropCapabilities(),
+		},
 	}
 }
 
 func envEqual(a, b []EnvVar) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// stringSliceEqual compares two string slices by content and order.
+func stringSliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}

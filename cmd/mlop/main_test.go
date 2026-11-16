@@ -83,17 +83,43 @@ func TestApplyAndStatusFlow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("status detail exit %d", code)
 	}
-	for _, want := range []string{"generation: 1", "ready:      0/2 replicas", "registry.example.com/iris-mlp:v1", "requeue:", "availability: minAvailable 1/2, anti-affinity on, maxSkew 1"} {
+	for _, want := range []string{"generation: 1", "ready:      0/2 replicas", "registry.example.com/iris-mlp:v1", "requeue:", "availability: minAvailable 1/2, anti-affinity on, maxSkew 1", "security:     runAsNonRoot on, uid 10001, read-only rootfs on, privilege escalation off, drop ALL, seccomp RuntimeDefault"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status detail %q, want %q", out, want)
 		}
 	}
 
-	// A new image bumps the generation and rolls.
+	// A security-only change bumps the generation and re-applies:
+	// SpecsEqual must see it, or the new context never renders.
+	relaxed := strings.Replace(irisV1, "replicas: 2", "replicas: 2\n  security:\n    runAsUser: 20000\n    seccompProfile: Unconfined", 1)
+	relaxedManifest := writeManifest(t, relaxed)
+	code, out, _ = runCLIState(t, state, "apply", "-f", relaxedManifest)
+	if code != 0 || !strings.Contains(out, "applied default/iris-mlp (generation 2)") {
+		t.Fatalf("security apply exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "security:     runAsNonRoot on, uid 20000, read-only rootfs on, privilege escalation off, drop ALL, seccomp Unconfined") {
+		t.Fatalf("relaxed status %q", out)
+	}
+
+	// An invalid security block is rejected at apply time: uid 0
+	// with runAsNonRoot on is a contradiction.
+	bad := strings.Replace(irisV1, "replicas: 2", "replicas: 2\n  security:\n    runAsUser: 0", 1)
+	badManifest := writeManifest(t, bad)
+	code, _, errOut := runCLIState(t, state, "apply", "-f", badManifest)
+	if code == 0 {
+		t.Fatalf("uid-0 apply should fail")
+	}
+	if !strings.Contains(errOut, "runAsUser is 0 but runAsNonRoot is on") {
+		t.Fatalf("uid-0 error %q", errOut)
+	}
+
+	// A new image bumps the generation and rolls. (The security
+	// apply above already took generation 2, so this is 3.)
 	manifestV2 := writeManifest(t, strings.Replace(irisV1, "iris-mlp:v1", "iris-mlp:v2", 1))
 	manifestV2 = strings.Replace(manifestV2, "version: v1", "version: v2", 1)
 	code, out, _ = runCLIState(t, state, "apply", "-f", manifestV2)
-	if code != 0 || !strings.Contains(out, "applied default/iris-mlp (generation 2)") {
+	if code != 0 || !strings.Contains(out, "applied default/iris-mlp (generation 3)") {
 		t.Fatalf("v2 apply exit %d, out %q", code, out)
 	}
 }

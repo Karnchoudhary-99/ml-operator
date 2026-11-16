@@ -337,6 +337,71 @@ func TestSpecsEqualAvailability(t *testing.T) {
 	}
 }
 
+// TestSpecsEqualSecurity: a security-only change is a spec
+// change — it must bump the generation on apply, or the
+// reconciler would never render the new security context. The
+// availability bug this guards against (session 4): SpecsEqual
+// ignored Availability, so an availability-only change was
+// treated as unchanged and the PDB never updated.
+func TestSpecsEqualSecurity(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+	int64Ptr := func(v int64) *int64 { return &v }
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Replicas: func() *int32 { v := int32(3); return &v }(),
+			Strategy: api.StrategyRolling,
+			Security: &api.SecuritySpec{
+				RunAsNonRoot:             boolPtr(true),
+				RunAsUser:                int64Ptr(10001),
+				ReadOnlyRootFilesystem:   boolPtr(true),
+				AllowPrivilegeEscalation: boolPtr(false),
+				DropCapabilities:         []string{"ALL"},
+				SeccompProfile:           "RuntimeDefault",
+			},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical security specs should be equal")
+	}
+	// Same values through fresh pointers must still be equal:
+	// the state file round-trips through JSON, so pointer
+	// identity can never be the comparison.
+	b = base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("security specs with equal values but fresh pointers should be equal")
+	}
+	for _, mutate := range []struct {
+		name string
+		f    func(*api.SecuritySpec)
+	}{
+		{"runAsNonRoot", func(s *api.SecuritySpec) { s.RunAsNonRoot = boolPtr(false) }},
+		{"runAsUser", func(s *api.SecuritySpec) { s.RunAsUser = int64Ptr(20000) }},
+		{"readOnlyRootFilesystem", func(s *api.SecuritySpec) { s.ReadOnlyRootFilesystem = boolPtr(false) }},
+		{"allowPrivilegeEscalation", func(s *api.SecuritySpec) { s.AllowPrivilegeEscalation = boolPtr(true) }},
+		{"dropCapabilities", func(s *api.SecuritySpec) { s.DropCapabilities = []string{"NET_BIND_SERVICE"} }},
+		{"seccompProfile", func(s *api.SecuritySpec) { s.SeccompProfile = "Unconfined" }},
+	} {
+		b = base()
+		mutate.f(b.Security)
+		if SpecsEqual(a, b) {
+			t.Fatalf("different %s should not be equal", mutate.name)
+		}
+	}
+	b = base()
+	b.Security.RunAsUser = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil runAsUser vs set uid should not be equal")
+	}
+	b = base()
+	b.Security = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil security block vs set block should not be equal")
+	}
+}
+
 // TestSpecsEqualPaused: toggling Paused is a spec change — it must
 // bump the generation on apply, or a paused manifest would be
 // reported unchanged and the reconciler would never see the flag.

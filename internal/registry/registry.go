@@ -265,6 +265,12 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.Availability != nil && !availabilityEqual(*a.Availability, *b.Availability) {
 		return false
 	}
+	if (a.Security == nil) != (b.Security == nil) {
+		return false
+	}
+	if a.Security != nil && !securityEqual(*a.Security, *b.Security) {
+		return false
+	}
 	if len(a.Env) != len(b.Env) {
 		return false
 	}
@@ -292,6 +298,53 @@ func canaryEqual(a, b api.CanarySpec) bool {
 // gateEqual compares two gate specs by value: nil vs set differs,
 // equal thresholds are equal whatever the pointers are.
 func gateEqual(a, b *api.GateSpec) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return *a == *b
+}
+
+// securityEqual compares two security specs by value: nil vs set
+// differs, equal fields are equal whatever the pointers are. The
+// pointer booleans and uid are compared by value, and the
+// capability list by content — a spec that survived a JSON
+// round-trip (state file) must still equal a freshly parsed
+// manifest with the same security, or `mlop diff -f` would bump
+// the generation on every identical re-apply.
+func securityEqual(a, b api.SecuritySpec) bool {
+	if !boolPtrEqual(a.RunAsNonRoot, b.RunAsNonRoot) ||
+		!int64PtrEqual(a.RunAsUser, b.RunAsUser) ||
+		!boolPtrEqual(a.ReadOnlyRootFilesystem, b.ReadOnlyRootFilesystem) ||
+		!boolPtrEqual(a.AllowPrivilegeEscalation, b.AllowPrivilegeEscalation) {
+		return false
+	}
+	if len(a.DropCapabilities) != len(b.DropCapabilities) {
+		return false
+	}
+	for i := range a.DropCapabilities {
+		if a.DropCapabilities[i] != b.DropCapabilities[i] {
+			return false
+		}
+	}
+	return a.SeccompProfile == b.SeccompProfile
+}
+
+// boolPtrEqual compares two optional booleans by value.
+func boolPtrEqual(a, b *bool) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return *a == *b
+}
+
+// int64PtrEqual compares two optional int64s by value.
+func int64PtrEqual(a, b *int64) bool {
 	if (a == nil) != (b == nil) {
 		return false
 	}

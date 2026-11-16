@@ -173,6 +173,35 @@ func TestParseMinimalYAML(t *testing.T) {
 	}
 }
 
+// TestParseSecurity pins the security block: a partial block
+// parses (the rest is ApplyDefaults' job), the YAML dialect
+// writes dropCapabilities as a comma-separated string, and the
+// JSON form carries a real array.
+func TestParseSecurity(t *testing.T) {
+	d, err := Parse([]byte("name: x\nspec:\n  security:\n    runAsUser: 20000\n    dropCapabilities: NET_BIND_SERVICE, SYS_TIME\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	s := d.Spec.Security
+	if s == nil || s.RunAsUser == nil || *s.RunAsUser != 20000 || s.RunAsNonRoot != nil {
+		t.Fatalf("partial security = %+v", s)
+	}
+	if len(s.DropCapabilities) != 2 || s.DropCapabilities[0] != "NET_BIND_SERVICE" || s.DropCapabilities[1] != "SYS_TIME" {
+		t.Fatalf("YAML dropCapabilities = %v, want [NET_BIND_SERVICE SYS_TIME]", s.DropCapabilities)
+	}
+	d, err = Parse([]byte(`{"name":"x","spec":{"security":{"runAsNonRoot":false,"readOnlyRootFilesystem":false,"dropCapabilities":["ALL"],"seccompProfile":"Unconfined"}}}`))
+	if err != nil {
+		t.Fatalf("Parse JSON: %v", err)
+	}
+	s = d.Spec.Security
+	if s == nil || s.RunAsNonRoot == nil || *s.RunAsNonRoot || s.ReadOnlyRootFilesystem == nil || *s.ReadOnlyRootFilesystem {
+		t.Fatalf("JSON security = %+v", s)
+	}
+	if len(s.DropCapabilities) != 1 || s.DropCapabilities[0] != "ALL" || s.SeccompProfile != "Unconfined" {
+		t.Fatalf("JSON security caps/profile = %+v", s)
+	}
+}
+
 // TestParseAvailability pins the availability block: a partial
 // block parses (the rest is ApplyDefaults' job), and the JSON form
 // carries the boolean through.
@@ -222,6 +251,11 @@ func TestParseErrors(t *testing.T) {
 		{"availability not a map", "name: x\nspec:\n  availability: 5\n", "must be a mapping"},
 		{"bad availability bool", "name: x\nspec:\n  availability:\n    antiAffinity: maybe\n", "must be a boolean"},
 		{"bad availability int", "name: x\nspec:\n  availability:\n    maxSkew: many\n", "must be a number"},
+		{"unknown security key", "name: x\nspec:\n  security:\n    bogus: 1\n", "unknown key"},
+		{"security not a map", "name: x\nspec:\n  security: 5\n", "must be a mapping"},
+		{"bad security bool", "name: x\nspec:\n  security:\n    runAsNonRoot: maybe\n", "must be a boolean"},
+		{"bad security uid", "name: x\nspec:\n  security:\n    runAsUser: many\n", "must be a number"},
+		{"bad security caps", "name: x\nspec:\n  security:\n    dropCapabilities: 5\n", "must be a comma-separated string or a list of strings"},
 		{"gate not a map", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate: 5\n", "must be a mapping"},
 		{"bad gate value", "name: x\nspec:\n  strategy: Canary\n  canary:\n    weight: 10\n    gate:\n      maxErrorRate: high\n", "must be a number"},
 		{"spec not a map", "name: x\nspec: 5\n", "must be a mapping"},

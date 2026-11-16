@@ -50,6 +50,11 @@ usual ones:
   needs a `blueGreen` block.
 - **`:latest` tag** — allowed, but warned about; `--strict`
   turns the warning into a failure on `mlop validate`.
+- **uid 0 with runAsNonRoot on** — `spec.security.runAsUser: 0`
+  while `runAsNonRoot` is true (the default) is a contradiction:
+  the kubelet would refuse to start the pod, so the operator
+  refuses the manifest instead. Set `runAsNonRoot: false` to run
+  as root, or pick a non-zero uid.
 
 ## `apply` fails and the deployment goes `Degraded` with `ApplyFailed`
 

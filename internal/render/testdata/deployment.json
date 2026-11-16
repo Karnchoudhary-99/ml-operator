@@ -40,9 +40,21 @@
       "Path": "/healthz",
       "InitialDelaySeconds": 5,
       "PeriodSeconds": 10
+    },
+    "Security": {
+      "ReadOnlyRootFilesystem": true,
+      "AllowPrivilegeEscalation": false,
+      "DropCapabilities": [
+        "ALL"
+      ]
     }
   },
   "AntiAffinity": true,
+  "PodSecurity": {
+    "RunAsNonRoot": true,
+    "RunAsUser": 10001,
+    "SeccompProfile": "RuntimeDefault"
+  },
   "TopologySpread": [
     {
       "MaxSkew": 1,

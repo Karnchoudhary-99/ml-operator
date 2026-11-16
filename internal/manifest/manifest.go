@@ -83,7 +83,7 @@ func mapDeployment(tree map[string]any, d *api.ModelDeployment) error {
 func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
-		"canary", "blueGreen", "autoscaling", "availability", "env", "health",
+		"canary", "blueGreen", "autoscaling", "availability", "security", "env", "health",
 		"paused",
 	}, "spec"); err != nil {
 		return err
@@ -307,6 +307,58 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 		s.Availability = as
 	}
 
+	if raw, ok := spec["security"]; ok {
+		a, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("spec.security: must be a mapping")
+		}
+		if err := checkKeys(a, []string{"runAsNonRoot", "runAsUser", "readOnlyRootFilesystem", "allowPrivilegeEscalation", "dropCapabilities", "seccompProfile"}, "spec.security"); err != nil {
+			return err
+		}
+		ss := &api.SecuritySpec{}
+		if v, ok := a["runAsNonRoot"]; ok {
+			b, err := boolField(v, "spec.security.runAsNonRoot")
+			if err != nil {
+				return err
+			}
+			ss.RunAsNonRoot = &b
+		}
+		if v, ok := a["runAsUser"]; ok {
+			n, err := intField(v, "spec.security.runAsUser")
+			if err != nil {
+				return err
+			}
+			ss.RunAsUser = &n
+		}
+		if v, ok := a["readOnlyRootFilesystem"]; ok {
+			b, err := boolField(v, "spec.security.readOnlyRootFilesystem")
+			if err != nil {
+				return err
+			}
+			ss.ReadOnlyRootFilesystem = &b
+		}
+		if v, ok := a["allowPrivilegeEscalation"]; ok {
+			b, err := boolField(v, "spec.security.allowPrivilegeEscalation")
+			if err != nil {
+				return err
+			}
+			ss.AllowPrivilegeEscalation = &b
+		}
+		if v, ok := a["dropCapabilities"]; ok {
+			caps, err := stringListField(v, "spec.security.dropCapabilities")
+			if err != nil {
+				return err
+			}
+			ss.DropCapabilities = caps
+		}
+		if v, ok, err := strField(a, "seccompProfile", "spec.security"); err != nil {
+			return err
+		} else if ok {
+			ss.SeccompProfile = v
+		}
+		s.Security = ss
+	}
+
 	if raw, ok := spec["env"]; ok {
 		e, ok := raw.(map[string]any)
 		if !ok {
@@ -439,6 +491,43 @@ func boolField(raw any, path string) (bool, error) {
 		return b, nil
 	default:
 		return false, fmt.Errorf("%s: must be a boolean", path)
+	}
+}
+
+// stringListField parses a list of strings. JSON manifests carry a
+// real array; the YAML dialect has no lists, so a YAML manifest
+// writes a comma-separated string ("NET_BIND_SERVICE, SYS_TIME").
+// An empty value parses to an empty list, which ApplyDefaults
+// treats as "drop ALL" (see SecuritySpec) — there is no spelling
+// for "drop nothing", by design.
+func stringListField(raw any, path string) ([]string, error) {
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return []string{}, nil
+		}
+		parts := strings.Split(v, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				return nil, fmt.Errorf("%s: empty capability in %q", path, v)
+			}
+			out = append(out, p)
+		}
+		return out, nil
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: every entry must be a string", path)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s: must be a comma-separated string or a list of strings", path)
 	}
 }
 

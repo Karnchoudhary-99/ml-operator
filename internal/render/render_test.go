@@ -1,12 +1,15 @@
 package render
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 )
 
 func boolPtr(v bool) *bool { return &v }
+
+func int64Ptr(v int64) *int64 { return &v }
 
 func dep() api.ModelDeployment {
 	d := api.ModelDeployment{
@@ -85,6 +88,38 @@ func TestDeploymentFor(t *testing.T) {
 	}
 	if got.Labels["ml-operator/managed-by"] != ManagedBy {
 		t.Fatalf("managed-by label wrong: %v", got.Labels)
+	}
+	// Security renders hardened by default: non-root uid 10001,
+	// read-only rootfs, no privilege escalation, drop ALL,
+	// RuntimeDefault seccomp — on the stable Deployment and,
+	// through DeploymentFor, on canary and green ones too.
+	if got.PodSecurity != (PodSecurityContext{RunAsNonRoot: true, RunAsUser: 10001, SeccompProfile: "RuntimeDefault"}) {
+		t.Fatalf("pod security wrong: %+v", got.PodSecurity)
+	}
+	if c.Security.ReadOnlyRootFilesystem != true || c.Security.AllowPrivilegeEscalation != false ||
+		len(c.Security.DropCapabilities) != 1 || c.Security.DropCapabilities[0] != "ALL" {
+		t.Fatalf("container security wrong: %+v", c.Security)
+	}
+	// An explicit security block renders as written, and the
+	// canary Deployment inherits it — a rollout never silently
+	// drops the hardening.
+	d.Spec.Security = &api.SecuritySpec{
+		RunAsNonRoot: boolPtr(false), RunAsUser: int64Ptr(0),
+		ReadOnlyRootFilesystem: boolPtr(false), AllowPrivilegeEscalation: boolPtr(true),
+		DropCapabilities: []string{"NET_BIND_SERVICE"}, SeccompProfile: "Unconfined",
+	}
+	api.ApplyDefaults(&d)
+	relaxed := DeploymentFor(d)
+	if relaxed.PodSecurity != (PodSecurityContext{RunAsNonRoot: false, RunAsUser: 0, SeccompProfile: "Unconfined"}) {
+		t.Fatalf("relaxed pod security wrong: %+v", relaxed.PodSecurity)
+	}
+	if relaxed.Container.Security.ReadOnlyRootFilesystem || !relaxed.Container.Security.AllowPrivilegeEscalation {
+		t.Fatalf("relaxed container security wrong: %+v", relaxed.Container.Security)
+	}
+	canary := CanaryDeploymentFor(d)
+	if canary.PodSecurity != relaxed.PodSecurity || len(canary.Container.Security.DropCapabilities) != 1 ||
+		canary.Container.Security.DropCapabilities[0] != "NET_BIND_SERVICE" {
+		t.Fatalf("canary did not inherit the relaxed security: %+v / %+v", canary.PodSecurity, canary.Container.Security)
 	}
 }
 
@@ -237,6 +272,30 @@ func TestDeploymentDiffReasons(t *testing.T) {
 	live2.Container.MemoryLimit = "2Gi"
 	if reasons := DeploymentDiffReasons(desired, live2); len(reasons) != 1 || reasons[0] != "resources changed" {
 		t.Fatalf("resources-only diff = %v", reasons)
+	}
+
+	// Security-only change names each relaxed field, so `mlop
+	// diff` tells the author exactly what hardened setting
+	// moved — and a security change is never reported in sync.
+	live3 := DeploymentFor(dep())
+	live3.PodSecurity.RunAsUser = 20000
+	live3.PodSecurity.SeccompProfile = "Unconfined"
+	live3.Container.Security.ReadOnlyRootFilesystem = false
+	live3.Container.Security.DropCapabilities = []string{"NET_BIND_SERVICE"}
+	reasons3 := DeploymentDiffReasons(desired, live3)
+	if len(reasons3) != 4 {
+		t.Fatalf("security-only diff = %v, want 4 reasons (runAsUser, seccompProfile, readOnlyRootFilesystem, dropCapabilities)", reasons3)
+	}
+	for _, want := range []string{"runAsUser", "seccompProfile", "readOnlyRootFilesystem", "dropCapabilities"} {
+		found := false
+		for _, r := range reasons3 {
+			if strings.Contains(r, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("security diff has no reason mentioning %s: %v", want, reasons3)
+		}
 	}
 
 	// Service diff: port and targetPort.

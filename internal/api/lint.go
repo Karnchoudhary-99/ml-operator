@@ -42,6 +42,7 @@ func Lint(d *ModelDeployment) []string {
 		add("spec.paused is true; the operator will not reconcile this deployment until it is resumed")
 	}
 	warns = append(warns, lintAvailability(spec)...)
+	warns = append(warns, lintSecurity(spec)...)
 	if spec.Strategy == StrategyCanary && spec.Canary != nil {
 		if spec.Canary.Weight > 50 {
 			add("spec.canary.weight is %d%%: the first canary step sends most traffic to an unproven revision", spec.Canary.Weight)
@@ -124,4 +125,37 @@ func lintGate(g *GateSpec, path string) []string {
 			"%s.minReadyRatio is %g: the rollout can promote while some pods are still unready", path, g.MinReadyRatio)}
 	}
 	return nil
+}
+
+// lintSecurity warns about security choices that give the model
+// server more privilege than it needs. An unset security block
+// is clean: ApplyDefaults hardens it, so only explicit
+// relaxations warn. Each warning names the risk, because a
+// relaxation with a reason (a server that genuinely needs a
+// writable rootfs) is fine — it just should not happen silently.
+func lintSecurity(spec ModelDeploymentSpec) []string {
+	s := spec.Security
+	if s == nil {
+		return nil
+	}
+	var warns []string
+	if s.RunAsNonRoot != nil && !*s.RunAsNonRoot {
+		warns = append(warns, "spec.security.runAsNonRoot is false: the model container may run as root — a compromised server has host-level privilege")
+	}
+	if s.RunAsUser != nil && *s.RunAsUser == 0 {
+		warns = append(warns, "spec.security.runAsUser is 0: the model container runs as root")
+	}
+	if s.ReadOnlyRootFilesystem != nil && !*s.ReadOnlyRootFilesystem {
+		warns = append(warns, "spec.security.readOnlyRootFilesystem is false: a compromised model server can write its own binary or drop a persistence file")
+	}
+	if s.AllowPrivilegeEscalation != nil && *s.AllowPrivilegeEscalation {
+		warns = append(warns, "spec.security.allowPrivilegeEscalation is true: a process in the model container can gain more privileges than its parent")
+	}
+	if s.DropCapabilities != nil && len(s.DropCapabilities) == 0 {
+		warns = append(warns, "spec.security.dropCapabilities is empty: no Linux capabilities are dropped from the model container")
+	}
+	if s.SeccompProfile == "Unconfined" {
+		warns = append(warns, "spec.security.seccompProfile is Unconfined: the model container runs with no syscall filtering")
+	}
+	return warns
 }

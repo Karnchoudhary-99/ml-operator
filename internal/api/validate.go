@@ -38,6 +38,7 @@ func Validate(d *ModelDeployment) []error {
 	errs = append(errs, validateStrategy(spec)...)
 	errs = append(errs, validateAutoscaling(spec.Autoscaling)...)
 	errs = append(errs, validateAvailability(spec)...)
+	errs = append(errs, validateSecurity(spec)...)
 	errs = append(errs, validateEnv(spec.Env)...)
 	errs = append(errs, validateHealth(spec.Health)...)
 
@@ -197,6 +198,42 @@ func validateAvailability(spec ModelDeploymentSpec) []error {
 }
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateSecurity checks the security block. A nil block is valid
+// — ApplyDefaults fills it in before the spec is ever rendered.
+// The checks are about contradictions and nonsense, not taste:
+// taste is Lint's job. runAsUser 0 with runAsNonRoot on is a
+// contradiction (the kubelet would refuse to start the pod);
+// a capability name that is not a valid Linux capability token
+// would be rejected by the API server at apply time; a seccomp
+// profile that is neither RuntimeDefault, Unconfined nor a
+// Localhost path is not a profile the kubelet knows.
+func validateSecurity(spec ModelDeploymentSpec) []error {
+	s := spec.Security
+	if s == nil {
+		return nil
+	}
+	var errs []error
+	if s.RunAsUser != nil {
+		if *s.RunAsUser < 0 || *s.RunAsUser > 4294967295 {
+			errs = append(errs, fmt.Errorf("spec.security.runAsUser must be between 0 and 4294967295, got %d", *s.RunAsUser))
+		}
+		if *s.RunAsUser == 0 && s.RunAsNonRootEnabled() {
+			errs = append(errs, fmt.Errorf("spec.security.runAsUser is 0 but runAsNonRoot is on: the kubelet would refuse to start the pod — set runAsNonRoot: false to run as root, or pick a non-zero uid"))
+		}
+	}
+	for _, c := range s.DropCapabilities {
+		if !capabilityRe.MatchString(c) {
+			errs = append(errs, fmt.Errorf("spec.security.dropCapabilities entry %q is not a valid Linux capability name (uppercase letters, digits, '_', e.g. \"ALL\" or \"NET_BIND_SERVICE\")", c))
+		}
+	}
+	if p := s.SeccompProfile; p != "" && p != "RuntimeDefault" && p != "Unconfined" && !strings.HasPrefix(p, "Localhost/") {
+		errs = append(errs, fmt.Errorf("spec.security.seccompProfile %q must be \"RuntimeDefault\", \"Unconfined\", or \"Localhost/<profile>\"", p))
+	}
+	return errs
+}
+
+var capabilityRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 func validateEnv(env map[string]string) []error {
 	var errs []error
