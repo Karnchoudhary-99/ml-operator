@@ -92,11 +92,23 @@ func (s *schema) toNode() *node {
 		}
 		pairs = append(pairs, field("enum", list(items...)))
 	}
+	// Integer bounds render as integers: a float rendering of a
+	// large bound (4294967295 -> "4.294967295e+09") is valid YAML
+	// but unreadable, and a CRD is a document humans read.
+	// Number bounds keep the float rendering.
 	if s.minimum != nil {
-		pairs = append(pairs, field("minimum", number(*s.minimum)))
+		if s.typ == "integer" {
+			pairs = append(pairs, field("minimum", integer(int64(*s.minimum))))
+		} else {
+			pairs = append(pairs, field("minimum", number(*s.minimum)))
+		}
 	}
 	if s.maximum != nil {
-		pairs = append(pairs, field("maximum", number(*s.maximum)))
+		if s.typ == "integer" {
+			pairs = append(pairs, field("maximum", integer(int64(*s.maximum))))
+		} else {
+			pairs = append(pairs, field("maximum", number(*s.maximum)))
+		}
 	}
 	if len(s.required) > 0 {
 		items := make([]*node, 0, len(s.required))
@@ -183,6 +195,15 @@ func SpecSchema() *schema {
 			prop("minAvailable", intSchema("Pods that must stay available during a voluntary disruption. 0 means the default (replicas-1).", intPtr(0), nil)),
 			prop("antiAffinity", boolSchema("Keep pods of one deployment off the same node. Absent means the default (true).")),
 			prop("maxSkew", intSchema("Topology-spread maxSkew: the most pods any one node may hold above the least-loaded node. 0 means the default (1).", intPtr(0), intPtr(10))),
+		)),
+		prop("security", objSchema("Pod- and container-level security context for the model's serving pods. Absent means the operator defaults (non-root uid 10001, read-only root filesystem, no privilege escalation, all capabilities dropped, RuntimeDefault seccomp). A uid of 0 with runAsNonRoot on is a contradiction — enforced by the operator, not the schema.",
+			nil,
+			prop("runAsNonRoot", boolSchema("Refuse to start the pod if any container would run as uid 0. Absent means the default (true).")),
+			prop("runAsUser", intSchema("Uid every container runs as. Absent means the default (10001). 0 is only legal with runAsNonRoot false.", intPtr(0), intPtr(4294967295))),
+			prop("readOnlyRootFilesystem", boolSchema("Mount the container's root filesystem read-only. Absent means the default (true).")),
+			prop("allowPrivilegeEscalation", boolSchema("Let a process gain more privileges than its parent. Absent means the default (false).")),
+			prop("dropCapabilities", arrSchema("Linux capabilities removed from the container's bounding set. Absent or empty means the default ([\"ALL\"]).", strSchema("One capability name, e.g. \"ALL\" or \"NET_BIND_SERVICE\"."))),
+			prop("seccompProfile", strSchema("Seccomp profile for the pod: \"RuntimeDefault\", \"Unconfined\", or \"Localhost/<profile>\". Empty means the default (\"RuntimeDefault\").")),
 		)),
 		prop("env", &schema{
 			typ:                  "object",

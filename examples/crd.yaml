@@ -188,6 +188,33 @@ spec:
                       description: 'Topology-spread maxSkew: the most pods any one node may hold above the least-loaded node. 0 means the default (1).'
                       minimum: 0
                       maximum: 10
+                security:
+                  type: object
+                  description: Pod- and container-level security context for the model's serving pods. Absent means the operator defaults (non-root uid 10001, read-only root filesystem, no privilege escalation, all capabilities dropped, RuntimeDefault seccomp). A uid of 0 with runAsNonRoot on is a contradiction — enforced by the operator, not the schema.
+                  properties:
+                    runAsNonRoot:
+                      type: boolean
+                      description: Refuse to start the pod if any container would run as uid 0. Absent means the default (true).
+                    runAsUser:
+                      type: integer
+                      description: Uid every container runs as. Absent means the default (10001). 0 is only legal with runAsNonRoot false.
+                      minimum: 0
+                      maximum: 4294967295
+                    readOnlyRootFilesystem:
+                      type: boolean
+                      description: Mount the container's root filesystem read-only. Absent means the default (true).
+                    allowPrivilegeEscalation:
+                      type: boolean
+                      description: Let a process gain more privileges than its parent. Absent means the default (false).
+                    dropCapabilities:
+                      type: array
+                      description: Linux capabilities removed from the container's bounding set. Absent or empty means the default (["ALL"]).
+                      items:
+                        type: string
+                        description: One capability name, e.g. "ALL" or "NET_BIND_SERVICE".
+                    seccompProfile:
+                      type: string
+                      description: 'Seccomp profile for the pod: "RuntimeDefault", "Unconfined", or "Localhost/<profile>". Empty means the default ("RuntimeDefault").'
                 env:
                   type: object
                   description: Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.
