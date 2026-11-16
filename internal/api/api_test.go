@@ -284,6 +284,175 @@ func TestApplyDefaultsAvailability(t *testing.T) {
 	}
 }
 
+// TestSecurityEffectiveValues pins the "nil means hardened
+// default" resolution: a nil spec resolves to non-root uid 10001,
+// read-only rootfs, no privilege escalation, drop ALL,
+// RuntimeDefault seccomp — and an explicit relaxation resolves
+// to exactly what the author asked for.
+func TestSecurityEffectiveValues(t *testing.T) {
+	var nilSpec *SecuritySpec
+	if !nilSpec.RunAsNonRootEnabled() {
+		t.Fatal("nil RunAsNonRootEnabled() = false, want true")
+	}
+	if got := nilSpec.EffectiveRunAsUser(); got != 10001 {
+		t.Fatalf("nil EffectiveRunAsUser() = %d, want 10001", got)
+	}
+	if !nilSpec.ReadOnlyRootFilesystemEnabled() {
+		t.Fatal("nil ReadOnlyRootFilesystemEnabled() = false, want true")
+	}
+	if nilSpec.AllowPrivilegeEscalationEnabled() {
+		t.Fatal("nil AllowPrivilegeEscalationEnabled() = true, want false")
+	}
+	if got := nilSpec.EffectiveDropCapabilities(); len(got) != 1 || got[0] != "ALL" {
+		t.Fatalf("nil EffectiveDropCapabilities() = %v, want [ALL]", got)
+	}
+	if got := nilSpec.EffectiveSeccompProfile(); got != "RuntimeDefault" {
+		t.Fatalf("nil EffectiveSeccompProfile() = %q, want RuntimeDefault", got)
+	}
+
+	relaxed := &SecuritySpec{
+		RunAsNonRoot:             boolPtr(false),
+		RunAsUser:                int64Ptr(0),
+		ReadOnlyRootFilesystem:   boolPtr(false),
+		AllowPrivilegeEscalation: boolPtr(true),
+		DropCapabilities:         []string{"NET_BIND_SERVICE"},
+		SeccompProfile:           "Unconfined",
+	}
+	if relaxed.RunAsNonRootEnabled() || relaxed.ReadOnlyRootFilesystemEnabled() || !relaxed.AllowPrivilegeEscalationEnabled() {
+		t.Fatal("relaxed spec did not resolve to its explicit values")
+	}
+	if got := relaxed.EffectiveRunAsUser(); got != 0 {
+		t.Fatalf("relaxed EffectiveRunAsUser() = %d, want 0", got)
+	}
+	if got := relaxed.EffectiveDropCapabilities(); len(got) != 1 || got[0] != "NET_BIND_SERVICE" {
+		t.Fatalf("relaxed EffectiveDropCapabilities() = %v, want [NET_BIND_SERVICE]", got)
+	}
+	// The returned list is a copy: mutating it must not change
+	// the spec (the render path passes it straight through).
+	got := relaxed.EffectiveDropCapabilities()
+	got[0] = "CHOWN"
+	if relaxed.DropCapabilities[0] != "NET_BIND_SERVICE" {
+		t.Fatal("EffectiveDropCapabilities returned the spec's own slice")
+	}
+}
+
+// TestApplyDefaultsSecurity pins the defaulting contract: a nil
+// security block takes the full hardened set, and a partial block
+// keeps the user's runAsUser while the other fields fill in —
+// setting one field must not silently relax the rest.
+func TestApplyDefaultsSecurity(t *testing.T) {
+	d := &ModelDeployment{
+		Name: "minimal",
+		Spec: ModelDeploymentSpec{Model: ModelSpec{Image: "img:latest"}},
+	}
+	ApplyDefaults(d)
+	if d.Spec.Security == nil {
+		t.Fatal("nil security block was not defaulted")
+	}
+	s := d.Spec.Security
+	if !s.RunAsNonRootEnabled() || s.EffectiveRunAsUser() != 10001 ||
+		!s.ReadOnlyRootFilesystemEnabled() || s.AllowPrivilegeEscalationEnabled() ||
+		s.EffectiveSeccompProfile() != "RuntimeDefault" {
+		t.Fatalf("defaulted security = %+v, want the hardened set", s)
+	}
+	if got := s.EffectiveDropCapabilities(); len(got) != 1 || got[0] != "ALL" {
+		t.Fatalf("defaulted dropCapabilities = %v, want [ALL]", got)
+	}
+	if errs := Validate(d); errs != nil {
+		t.Fatalf("defaulted security deployment should validate, got %v", errs)
+	}
+
+	d2 := validDeployment()
+	uid := int64(20000)
+	d2.Spec.Security = &SecuritySpec{RunAsUser: &uid}
+	ApplyDefaults(d2)
+	if d2.Spec.Security.EffectiveRunAsUser() != 20000 {
+		t.Fatalf("explicit runAsUser overwritten: %d", d2.Spec.Security.EffectiveRunAsUser())
+	}
+	if !d2.Spec.Security.RunAsNonRootEnabled() || !d2.Spec.Security.ReadOnlyRootFilesystemEnabled() {
+		t.Fatal("partial security block lost its hardening defaults")
+	}
+	if errs := Validate(d2); errs != nil {
+		t.Fatalf("defaulted partial security deployment should validate, got %v", errs)
+	}
+}
+
+// TestValidateSecurity pins the rejection rules: uid 0 with
+// runAsNonRoot on is a contradiction, out-of-range uids and
+// malformed capability names are nonsense, and a seccomp profile
+// that is not RuntimeDefault / Unconfined / Localhost/* is not
+// a profile the kubelet knows. A relaxed-but-consistent spec
+// (root with runAsNonRoot off) validates — taste is Lint's job.
+func TestValidateSecurity(t *testing.T) {
+	uid0 := int64(0)
+	root := validDeployment()
+	root.Spec.Security = &SecuritySpec{RunAsNonRoot: boolPtr(true), RunAsUser: &uid0}
+	if errs := Validate(root); len(errs) == 0 {
+		t.Fatal("uid 0 with runAsNonRoot on should not validate")
+	}
+	// Same uid with runAsNonRoot explicitly off is consistent.
+	root.Spec.Security.RunAsNonRoot = boolPtr(false)
+	if errs := Validate(root); errs != nil {
+		t.Fatalf("root with runAsNonRoot off should validate, got %v", errs)
+	}
+
+	badUID := int64(-1)
+	d := validDeployment()
+	d.Spec.Security = &SecuritySpec{RunAsUser: &badUID}
+	if errs := Validate(d); len(errs) == 0 {
+		t.Fatal("negative runAsUser should not validate")
+	}
+
+	d2 := validDeployment()
+	d2.Spec.Security = &SecuritySpec{DropCapabilities: []string{"net_bind_service"}}
+	if errs := Validate(d2); len(errs) == 0 {
+		t.Fatal("lowercase capability name should not validate")
+	}
+
+	d3 := validDeployment()
+	d3.Spec.Security = &SecuritySpec{SeccompProfile: "MyProfile"}
+	if errs := Validate(d3); len(errs) == 0 {
+		t.Fatal("unknown seccomp profile should not validate")
+	}
+	d3.Spec.Security.SeccompProfile = "Localhost/my-profile.json"
+	if errs := Validate(d3); errs != nil {
+		t.Fatalf("Localhost seccomp profile should validate, got %v", errs)
+	}
+}
+
+// TestLintSecurity pins the warnings: an unset block is clean,
+// and every explicit relaxation warns by name. Lint runs on the
+// manifest as written, before defaults fill anything in.
+func TestLintSecurity(t *testing.T) {
+	d := validDeployment()
+	if warns := Lint(d); len(warns) != 0 {
+		t.Fatalf("deployment without a security block should be lint-clean, got %v", warns)
+	}
+	d.Spec.Security = &SecuritySpec{
+		RunAsNonRoot:             boolPtr(false),
+		RunAsUser:                int64Ptr(0),
+		ReadOnlyRootFilesystem:   boolPtr(false),
+		AllowPrivilegeEscalation: boolPtr(true),
+		DropCapabilities:         []string{},
+		SeccompProfile:           "Unconfined",
+	}
+	warns := Lint(d)
+	if len(warns) != 6 {
+		t.Fatalf("fully relaxed security should warn 6 times, got %d: %v", len(warns), warns)
+	}
+	for _, want := range []string{"runAsNonRoot", "runAsUser", "readOnlyRootFilesystem", "allowPrivilegeEscalation", "dropCapabilities", "seccompProfile"} {
+		found := false
+		for _, w := range warns {
+			if strings.Contains(w, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("no warning mentions %s: %v", want, warns)
+		}
+	}
+}
+
 func TestStatusConditions(t *testing.T) {
 	s := ModelDeploymentStatus{}
 	if s.ConditionFor("Ready") != nil {
