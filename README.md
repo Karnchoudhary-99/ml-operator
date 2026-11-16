@@ -36,6 +36,7 @@ with the desired state.
 - [x] Batch apply (`mlop apply -d dir`, per-file errors + summary, `--dry-run`)
 - [x] Deployment hardening (PodDisruptionBudget, pod anti-affinity, topology spread)
 - [x] Pause / resume reconciliation (`spec.paused`, `mlop pause` / `mlop resume`)
+- [x] Shell completion for `mlop` (bash, zsh, fish — `mlop completion`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -226,6 +227,31 @@ v2 is live and the promotion is in the log:
 examples/mlop-tour.sh
 # tour passed: v1 applied, v2 canaried and promoted, events logged.
 ```
+
+## Shell completion
+
+`mlop completion <bash|zsh|fish>` prints a completion script
+generated from the same command table the CLI dispatches on, so
+it can never offer a command or flag mlop does not have. It
+completes command names, per-command flags, files for `-f`/`-d`,
+and deployment names — live, from the state file, through the
+hidden `mlop __complete-names` helper (which passes `--state`
+through when you gave one, and stays silent when nothing is
+deployed yet). `rollout` completes its `status` subcommand first.
+
+```bash
+mlop completion bash | sudo tee /etc/bash_completion.d/mlop   # system-wide
+source <(mlop completion bash)                                # this shell only
+mlop completion zsh > "${fpath[1]}/_mlop"                     # then compinit
+mlop completion fish > ~/.config/fish/completions/mlop.fish
+```
+
+The bash script is exercised live by
+`examples/completion-tour.sh` (real `_mlop` calls against a live
+state file); the zsh script is syntax-checked with `zsh -n`. The
+fish script is generated but not executed anywhere in CI — no
+fish binary is installed — so treat its first real-world use as
+worth a quick check.
 
 ## Installing on a cluster
 
