@@ -93,3 +93,54 @@ func TestPauseResumeErrors(t *testing.T) {
 		t.Fatalf("pause with no name: code=%d err=%q, want 2", code, errOut)
 	}
 }
+
+// TestPausedSurfaceInStatusDiffRollbackWatch: a paused deployment
+// is visible in status (text + JSON) and diff (note + JSON flag),
+// and the commands that need a live reconcile refuse it instead
+// of silently doing nothing (rollback) or spinning to a timeout
+// (watch).
+func TestPausedSurfaceInStatusDiffRollbackWatch(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	manifest := writeManifest(t, irisV1)
+
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatal("apply failed")
+	}
+	// Give the deployment a previous image so rollback has
+	// something to refuse about.
+	v2 := strings.Replace(irisV1, "iris-mlp:v1", "iris-mlp:v2", 1)
+	v2 = strings.Replace(v2, "version: v1", "version: v2", 1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", writeManifest(t, v2)); code != 0 {
+		t.Fatal("v2 apply failed")
+	}
+	if code, _, _ := runCLIState(t, state, "pause", "iris-mlp"); code != 0 {
+		t.Fatal("pause failed")
+	}
+
+	code, out, _ := runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "paused:     yes") {
+		t.Fatalf("status detail exit %d, out %q, want a paused line", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp", "--json")
+	if code != 0 || !strings.Contains(out, `"paused": true`) {
+		t.Fatalf("status --json exit %d, out %q, want paused true", code, out)
+	}
+
+	code, out, _ = runCLIState(t, state, "diff", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "is paused — this plan applies on resume") {
+		t.Fatalf("diff exit %d, out %q, want the paused note", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "diff", "iris-mlp", "--json")
+	if code != 0 || !strings.Contains(out, `"paused": true`) {
+		t.Fatalf("diff --json exit %d, out %q, want paused true", code, out)
+	}
+
+	code, _, errOut := runCLIState(t, state, "rollback", "iris-mlp")
+	if code != 1 || !strings.Contains(errOut, "is paused; resume it first") {
+		t.Fatalf("rollback paused: code=%d err=%q, want a paused refusal", code, errOut)
+	}
+	code, _, errOut = runCLIState(t, state, "watch", "iris-mlp", "--timeout", "1s")
+	if code != 1 || !strings.Contains(errOut, "is paused; resume it to make progress") {
+		t.Fatalf("watch paused: code=%d err=%q, want a paused refusal", code, errOut)
+	}
+}

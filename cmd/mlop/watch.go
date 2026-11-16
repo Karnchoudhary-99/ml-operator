@@ -86,6 +86,16 @@ func cmdWatch(opts *options, args []string) int {
 		keys = []string{key}
 	}
 
+	// A paused deployment never reaches a terminal phase — the
+	// reconciler is frozen — so watching one would spin until the
+	// timeout and report nothing useful. Refuse up front instead.
+	for _, key := range keys {
+		if rt.Registry.Get(key).Deployment.Spec.Paused {
+			fmt.Fprintf(opts.stderr, "mlop watch: %s is paused; resume it to make progress (mlop resume %s)\n", key, key)
+			return 1
+		}
+	}
+
 	// Poll on the configured interval until the timeout: long
 	// enough for a canary step to advance by default, short
 	// enough to fail loudly instead of hanging a script forever.

@@ -49,6 +49,13 @@ func cmdRollback(opts *options, args []string) int {
 		fmt.Fprintf(opts.stderr, "mlop rollback: no previous version to roll back to for %s — its image has never been replaced\n", key)
 		return 1
 	}
+	// A rollback is a new generation that must roll out through
+	// the normal strategy; a paused reconciler would silently
+	// swallow it, so refuse instead of pretending it happened.
+	if d.Spec.Paused {
+		fmt.Fprintf(opts.stderr, "mlop rollback: %s is paused; resume it first (mlop resume %s)\n", key, d.Name)
+		return 1
+	}
 	if prevImage == d.Spec.Model.Image {
 		fmt.Fprintf(opts.stderr, "mlop rollback: %s already serves the previous version %s (%s)\n", key, prevImage, d.Status.PreviousVersion)
 		return 1
