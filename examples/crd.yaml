@@ -208,6 +208,9 @@ spec:
                       type: integer
                       description: Probe interval, in seconds.
                       minimum: 0
+                paused:
+                  type: boolean
+                  description: 'Suspend reconciliation while true: the operator makes no cluster changes, advances no rollout, and applies no autoscaling decision. Live objects keep serving as they are; resume by setting false. Default false.'
             status:
               type: object
               description: Observed state of a deployed model.

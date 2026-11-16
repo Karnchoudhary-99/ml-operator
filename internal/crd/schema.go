@@ -195,6 +195,7 @@ func SpecSchema() *schema {
 			prop("initialDelaySeconds", intSchema("Wait after container start before the first probe.", intPtr(0), nil)),
 			prop("periodSeconds", intSchema("Probe interval, in seconds.", intPtr(0), nil)),
 		)),
+		prop("paused", boolSchema("Suspend reconciliation while true: the operator makes no cluster changes, advances no rollout, and applies no autoscaling decision. Live objects keep serving as they are; resume by setting false. Default false.")),
 	)
 }
 
