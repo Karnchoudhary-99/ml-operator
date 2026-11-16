@@ -156,12 +156,47 @@ a note that nothing will correct it until resume.
 
 Drift never changes anything — it is a read, so it is safe in CI
 (the exit code is the gate: 0 in sync, 1 drift found, 2 usage
-error). The fix is a decision, not a command: re-apply the manifest
-when the live change was a mistake, or update the manifest when the
-live change was the intended one and the spec is what is stale.
+error). The fix is a decision: when the live change was a mistake,
+repair it (next section); when the live change was the intended one
+and the spec is what is stale, update the manifest instead.
 `examples/drift-tour.sh` walks through both: an image swap, a
 deleted Service, and a manual scale-down, each caught by drift and
 fixed by a re-apply.
+
+## Repairing drift
+
+```bash
+mlop repair iris-mlp                  # exit 0 when everything is repaired
+mlop repair iris-mlp --dry-run        # report what would change, write nothing (exit 1 when it would repair)
+mlop repair --all                     # every registered deployment
+mlop repair iris-mlp --json           # machine-readable report
+```
+
+Repair is the write half of drift: it re-applies the desired state
+to every drifted or missing object — the same apply plan the
+reconciler uses, so repair and reconcile can never disagree about
+what "correct" looks like — then re-checks drift to verify the fix.
+It records a `DriftRepaired` event, visible in `mlop logs`.
+
+Three deliberate limits, all safety:
+
+- **Repair never deletes.** An unexpected object — a leftover
+  canary, an HPA after autoscaling was turned off — might still be
+  serving traffic, or might be evidence the manifest is stale.
+  Repair reports it as left as-is and leaves the deletion to you
+  (or to a reconcile, which owns that decision).
+- **A paused deployment is refused.** Repair writes nothing while
+  paused; resume first.
+- **Repair never advances a rollout.** It fixes objects, not state
+  machines: a canary in flight keeps its pinned stable image,
+  exactly as drift reports it.
+
+Use `--dry-run` in CI the same way as `mlop drift`: it exits 1 when
+it would have repaired something, so a pipeline can fail on drift
+and let a human decide whether to repair or to update the manifest.
+`examples/repair-tour.sh` walks through the loop end to end: an
+image swap, a deleted Service, and a leftover canary — the first
+two repaired, the canary reported and left standing.
 
 ## Reading the log
 
