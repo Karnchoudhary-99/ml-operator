@@ -57,7 +57,7 @@ func Commands() []Command {
 
 // Shells returns the shells mlop generates completions for.
 func Shells() []string {
-	return []string{"bash", "zsh"}
+	return []string{"bash", "zsh", "fish"}
 }
 
 // Script renders the completion script for one shell.
@@ -67,6 +67,8 @@ func Script(shell string) (string, error) {
 		return bashScript(), nil
 	case "zsh":
 		return zshScript(), nil
+	case "fish":
+		return fishScript(), nil
 	default:
 		return "", fmt.Errorf("unknown shell %q (want one of: %s)", shell, strings.Join(Shells(), ", "))
 	}

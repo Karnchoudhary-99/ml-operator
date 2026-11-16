@@ -18,14 +18,16 @@ func TestScriptShells(t *testing.T) {
 			t.Fatalf("Script(%s) is empty", shell)
 		}
 		// Every command must be completable, and every flag of every
-		// command must appear in every script.
+		// command must appear in every script. Fish spells flags
+		// as -l/--less forms (-l dry-run, -s f), so check the
+		// spelling each shell actually emits.
 		for _, c := range Commands() {
 			if !strings.Contains(out, c.Name) {
 				t.Fatalf("Script(%s) never mentions command %q", shell, c.Name)
 			}
 			for _, f := range c.Flags {
-				if !strings.Contains(out, f) {
-					t.Fatalf("Script(%s) never mentions flag %q of %q", shell, f, c.Name)
+				if !flagAppears(out, shell, f) {
+					t.Fatalf("Script(%s) never completes flag %q of %q", shell, f, c.Name)
 				}
 			}
 		}
@@ -35,10 +37,23 @@ func TestScriptShells(t *testing.T) {
 	}
 }
 
+// flagAppears checks that a flag is completable in a script. Bash
+// and zsh carry the flag literally (--dry-run, -f); fish splits it
+// into -l dry-run / -s f, so check that spelling there.
+func flagAppears(script, shell, flag string) bool {
+	if shell == "fish" {
+		if strings.HasPrefix(flag, "--") {
+			return strings.Contains(script, "-l "+strings.TrimLeft(flag, "-"))
+		}
+		return strings.Contains(script, "-s "+strings.TrimLeft(flag, "-"))
+	}
+	return strings.Contains(script, flag)
+}
+
 func TestScriptUnknownShell(t *testing.T) {
 	if _, err := Script("powershell"); err == nil {
 		t.Fatal("Script(powershell) should fail")
-	} else if !strings.Contains(err.Error(), "powershell") || !strings.Contains(err.Error(), "bash, zsh") {
+	} else if !strings.Contains(err.Error(), "powershell") || !strings.Contains(err.Error(), "bash, zsh, fish") {
 		t.Fatalf("unknown-shell error %q should name the shell and the valid ones", err)
 	}
 }
@@ -82,5 +97,25 @@ func TestZshScriptSyntax(t *testing.T) {
 	}
 	if out, err := exec.Command(zsh, "-n", path).CombinedOutput(); err != nil {
 		t.Fatalf("zsh -n: %v\n%s", err, out)
+	}
+}
+
+func TestFishScriptShape(t *testing.T) {
+	// No fish binary on the dev VM (or in CI), so this checks the
+	// shape instead of running it: one `complete -c mlop` line per
+	// command, a name-completion line driven by __complete-names,
+	// and the rollout subcommand line.
+	out, err := Script("fish")
+	if err != nil {
+		t.Fatalf("Script(fish): %v", err)
+	}
+	if got := strings.Count(out, "complete -c mlop"); got < len(Commands()) {
+		t.Fatalf("fish script has %d complete lines, want >= %d", got, len(Commands()))
+	}
+	if !strings.Contains(out, "__fish_seen_subcommand_from rollout") {
+		t.Fatal("fish script does not complete the rollout subcommand")
+	}
+	if !strings.Contains(out, "(mlop __complete-names)") {
+		t.Fatal("fish script does not complete deployment names from __complete-names")
 	}
 }
