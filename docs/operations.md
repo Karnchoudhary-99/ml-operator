@@ -350,3 +350,23 @@ waiting for an event. A deployment the resync cannot reconcile is
 logged to stderr and retried on the next tick; it never kills the
 operator. Set the interval to `0` to disable the resync, and the
 metrics address to `""` to disable the metrics endpoint.
+
+## End-to-end tours
+
+The eight scripts in `examples/*-tour.sh` are the CLI's end-to-end
+smoke tests: each one drives a whole story through `mlop` (apply,
+ready, canary or blue-green rollout, rollback, backup/restore,
+batch apply, hardening) and asserts the output at every step, so a
+tour is a demo and a test in one. Run one directly
+(`examples/mlop-tour.sh`) or all of them; CI runs all eight on
+every push and PR.
+
+All tours share `examples/tour-lib.sh`, which provides `expect`
+(run a command, capture its output, fail unless it matches a
+pattern) and `expect_lines` (fail unless the output has exactly
+that many lines). Assertions capture mlop's output first and only
+then check it — never pipe mlop straight into `grep -q`, because
+grep exits on the match while mlop still writes the lines after
+it, and under `set -o pipefail` that SIGPIPE kills the tour.
+A failed assertion prints the full captured output, so a red tour
+says what mlop actually printed.
