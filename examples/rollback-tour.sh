@@ -12,6 +12,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source examples/tour-lib.sh
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 MLOP="$WORK/mlop"
@@ -24,7 +25,7 @@ step() { echo; echo "=== $* ==="; }
 step "apply iris-mlp v1"
 "$MLOP" --state "$STATE" apply -f examples/iris-mlp.yaml
 "$MLOP" --state "$STATE" ready iris-mlp --replicas 2
-"$MLOP" --state "$STATE" status iris-mlp | grep -q "phase:      Available"
+expect "phase:      Available" "$MLOP" --state "$STATE" status iris-mlp
 
 step "rollback refuses: nothing has replaced v1 yet"
 if "$MLOP" --state "$STATE" rollback iris-mlp 2>/dev/null; then
@@ -35,18 +36,18 @@ step "canary rollout of v2 (10% -> 100% -> promote)"
 "$MLOP" --state "$STATE" apply -f examples/iris-mlp-canary.yaml
 "$MLOP" --state "$STATE" ready iris-mlp --replicas 2 --canary
 sleep 2
-"$MLOP" --state "$STATE" rollout status iris-mlp | grep -q "weight 100%"
+expect "weight 100%" "$MLOP" --state "$STATE" rollout status iris-mlp
 sleep 2
-"$MLOP" --state "$STATE" rollout status iris-mlp | grep -q "state:      promoted"
+expect "state:      promoted" "$MLOP" --state "$STATE" rollout status iris-mlp
 
 step "v2 is live and v1 is the rollback target"
-"$MLOP" --state "$STATE" status iris-mlp | grep -q "registry.example.com/iris-mlp:v2"
-"$MLOP" --state "$STATE" status iris-mlp | grep -q "previous:   registry.example.com/iris-mlp:v1 (v1)"
+expect "registry.example.com/iris-mlp:v2" "$MLOP" --state "$STATE" status iris-mlp
+expect "previous:   registry.example.com/iris-mlp:v1 (v1)" "$MLOP" --state "$STATE" status iris-mlp
 
 step "roll back to v1"
-"$MLOP" --state "$STATE" rollback iris-mlp | grep -q "rolled back default/iris-mlp (generation 3)"
-"$MLOP" --state "$STATE" status iris-mlp | grep -q "registry.example.com/iris-mlp:v1"
-"$MLOP" --state "$STATE" logs iris-mlp | grep -q "RolledBack"
+expect "rolled back default/iris-mlp (generation 3)" "$MLOP" --state "$STATE" rollback iris-mlp
+expect "registry.example.com/iris-mlp:v1" "$MLOP" --state "$STATE" status iris-mlp
+expect "RolledBack" "$MLOP" --state "$STATE" logs iris-mlp
 
 echo
 echo "tour passed: v2 promoted, rollback restored v1 as generation 3, event logged."
