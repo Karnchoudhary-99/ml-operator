@@ -8,6 +8,11 @@ the first public version is cut.
 
 ### Added
 
+- Drift detection — `mlop drift <name> | mlop drift --all
+  [--json]`, exit 0 in sync / 1 drift found / 2 usage error;
+  per-object verdicts (in sync / drifted / missing / unexpected)
+  with one reason per moved field, sharing the desired-state
+  computation with the apply plan.
 - Shell completion for `mlop` — `mlop completion <bash|zsh|fish>`
   generates the script from the CLI's own command table, so it
   completes command names, per-command flags, files for `-f`/`-d`,
