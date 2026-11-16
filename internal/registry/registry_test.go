@@ -336,3 +336,82 @@ func TestSpecsEqualAvailability(t *testing.T) {
 		t.Fatal("nil availability block vs set block should not be equal")
 	}
 }
+
+// TestSpecsEqualPaused: toggling Paused is a spec change — it must
+// bump the generation on apply, or a paused manifest would be
+// reported unchanged and the reconciler would never see the flag.
+func TestSpecsEqualPaused(t *testing.T) {
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Strategy: api.StrategyRolling,
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical unpaused specs should be equal")
+	}
+	b.Paused = true
+	if SpecsEqual(a, b) {
+		t.Fatal("paused vs unpaused specs should not be equal")
+	}
+	a.Paused, b.Paused = true, true
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical paused specs should be equal")
+	}
+}
+
+// TestRegisterPreservesStatus: re-registering a deployment with a
+// new spec (the apply path) must not wipe the stored status — a
+// parsed manifest carries a zero status, and overwriting would lose
+// the phase, the conditions, and the rollback target. This bit the
+// pause feature: pausing a live deployment reported Pending and
+// lost PreviousImage until the fix.
+func TestRegisterPreservesStatus(t *testing.T) {
+	r := New()
+	d := api.ModelDeployment{
+		Name: "x", Namespace: "default", Generation: 1,
+		Spec: api.ModelDeploymentSpec{
+			Model: api.ModelSpec{Image: "img:v1", Version: "v1"},
+			Port:  8080,
+		},
+	}
+	r.Register(d)
+	st := api.ModelDeploymentStatus{
+		Phase: api.PhaseAvailable, ReadyReplicas: 2,
+		PreviousImage: "img:v0", PreviousVersion: "v0",
+	}
+	if !r.UpdateStatus("default/x", st) {
+		t.Fatal("UpdateStatus failed")
+	}
+
+	// A new spec with a zero status: the stored status survives.
+	d2 := d
+	d2.Generation = 2
+	d2.Spec.Model.Image = "img:v2"
+	d2.Spec.Model.Version = "v2"
+	r.Register(d2)
+	got := r.Get("default/x").Deployment
+	if got.Status.Phase != api.PhaseAvailable || got.Status.PreviousImage != "img:v0" {
+		t.Fatalf("re-register wiped status: %+v", got.Status)
+	}
+	if got.Spec.Model.Image != "img:v2" || got.Generation != 2 {
+		t.Fatalf("re-register did not take the new spec: %+v", got)
+	}
+
+	// Inserting a fresh key keeps the status as given (Restore
+	// re-registers deployments from the state file this way).
+	d3 := api.ModelDeployment{
+		Name: "y", Namespace: "default", Generation: 1,
+		Spec: api.ModelDeploymentSpec{
+			Model: api.ModelSpec{Image: "img:v1", Version: "v1"},
+			Port:  8080,
+		},
+		Status: st,
+	}
+	r.Register(d3)
+	if got := r.Get("default/y").Deployment.Status; got.Phase != api.PhaseAvailable {
+		t.Fatalf("fresh register dropped status: %+v", got)
+	}
+}

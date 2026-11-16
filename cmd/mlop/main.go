@@ -72,6 +72,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdLoad(opts, rest[1:])
 	case "rollback":
 		return cmdRollback(opts, rest[1:])
+	case "pause":
+		return cmdPause(opts, rest[1:])
+	case "resume":
+		return cmdResume(opts, rest[1:])
 	case "watch":
 		return cmdWatch(opts, rest[1:])
 	case "backup":
@@ -113,6 +117,8 @@ Commands:
   ready <name> --replicas N [--canary] simulate pods passing the readiness gate
   load <name> [--canary] [--loading | --fail] simulate the model-load probe (loaded, loading, or failed)
   rollback <name>                      restore the previous image/version
+  pause <name>                         suspend reconciliation (live objects keep serving)
+  resume <name>                        clear the pause and reconcile immediately
   watch <name>                         poll until Available (exit 0), Failed/Degraded (1), or timeout (2)
   backup <file> [--force]              snapshot all operator state to a checksummed backup file
   restore <file> [--force]             verify a backup and restore state from it

@@ -16,10 +16,13 @@ import (
 // diffView is the JSON form of a diff: the deployment, the generation
 // the plan was computed for, whether live already matches desired,
 // and the actions Reconcile would execute (a lone NoOp when in sync).
+// Paused reports whether the deployment is paused: the plan is what
+// Reconcile would do on resume, nothing applies while paused.
 type diffView struct {
 	Deployment string              `json:"deployment"`
 	Generation int64               `json:"generation"`
 	InSync     bool                `json:"inSync"`
+	Paused     bool                `json:"paused"`
 	Actions    []controller.Action `json:"actions"`
 }
 
@@ -103,8 +106,13 @@ func cmdDiff(opts *options, args []string) int {
 		fmt.Fprintf(opts.stderr, "mlop diff: %v\n", err)
 		return 1
 	}
+	// The plan is computed from the registered spec, so it shows
+	// what Reconcile would do on resume even while paused — the
+	// note below says so, instead of letting the plan look like
+	// an imminent apply.
+	paused := rt.Registry.Get(key).Deployment.Spec.Paused
 	view := diffView{Deployment: key, Generation: generation, Actions: actions,
-		InSync: len(actions) == 1 && actions[0].Kind == controller.ActionNoOp}
+		InSync: len(actions) == 1 && actions[0].Kind == controller.ActionNoOp, Paused: paused}
 	if *jsonOut {
 		enc := json.NewEncoder(opts.stdout)
 		enc.SetIndent("", "  ")
@@ -113,6 +121,9 @@ func cmdDiff(opts *options, args []string) int {
 			return 1
 		}
 		return 0
+	}
+	if paused {
+		fmt.Fprintf(opts.stdout, "note: %s is paused — this plan applies on resume, nothing changes now\n", key)
 	}
 	if view.InSync {
 		fmt.Fprintf(opts.stdout, "in sync: %s (generation %d) — %s\n", key, generation, actions[0].Reason)

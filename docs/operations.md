@@ -106,6 +106,33 @@ deployment already serves it. A rollback is itself a rollout
 through the deployment's normal strategy — it does not edit
 history, so a second rollback returns to the version just left.
 
+## Pausing and resuming
+
+```bash
+mlop pause iris-mlp    # suspend reconciliation (generation bumps)
+mlop resume iris-mlp   # clear the pause and reconcile immediately
+```
+
+Pausing is the incident-freeze switch: while a deployment is
+paused the operator makes no cluster changes, advances no rollout,
+and applies no autoscaling decision — the live objects keep
+serving exactly as they are, and the deployment keeps its phase
+with a `Paused: True` condition. A canary or blue-green rollout
+paused mid-flight resumes from where it stopped instead of
+restarting. `mlop watch` and `mlop rollback` refuse a paused
+deployment rather than waiting on a phase that cannot arrive or
+silently swallowing the new generation.
+
+The same flag lives in the manifest (`spec.paused: true`), so a
+change can be staged while paused: apply the manifest with
+`paused: true` and the new image registers and bumps the
+generation but does not apply — `mlop diff` shows the pending
+plan with a note that it applies on resume. One sharp edge:
+apply replaces the whole spec, so a manifest *without* `paused`
+resumes the deployment (absent means false). To change the spec
+while staying paused, the manifest must set `paused: true` —
+`mlop apply` and `mlop validate` both warn about it.
+
 ## Reading the log
 
 ```bash
@@ -353,12 +380,12 @@ metrics address to `""` to disable the metrics endpoint.
 
 ## End-to-end tours
 
-The eight scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The nine scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
-ready, canary or blue-green rollout, rollback, backup/restore,
-batch apply, hardening) and asserts the output at every step, so a
-tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all eight on
+ready, canary or blue-green rollout, rollback, pause/resume,
+backup/restore, batch apply, hardening) and asserts the output at
+every step, so a tour is a demo and a test in one. Run one directly
+(`examples/mlop-tour.sh`) or all of them; CI runs all nine on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`

@@ -284,6 +284,29 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 		return Result{Phase: api.PhaseFailed, Message: msg}, nil
 	}
 
+	// A paused deployment is frozen, not failed: no cluster
+	// writes, no rollout progress, no autoscaling decision, and
+	// no rollout-state cleanup — a canary or blue-green rollout
+	// paused mid-flight resumes from where it stopped. The
+	// phase is preserved (the model keeps serving as it was),
+	// and the Paused condition records the freeze. The event
+	// fires once, on the transition into paused, not on every
+	// reconcile — status and apply reconcile often, and a
+	// paused deployment would otherwise spam the event log.
+	if d.Spec.Paused {
+		ready := r.Cluster.ReadyReplicas(key)
+		phase := d.Status.Phase
+		if phase == "" {
+			phase = api.PhasePending
+		}
+		msg := "reconciliation paused — resume with `mlop resume " + key + "`"
+		if c := d.Status.ConditionFor("Paused"); c == nil || c.Status != "True" {
+			r.recordEvent(key, metrics.EventNormal, "ReconciliationPaused", msg)
+		}
+		r.updateStatus(key, d, phase, ready, "Paused", msg)
+		return Result{Phase: phase, Message: msg}, nil
+	}
+
 	// Canary rollouts keep their state across reconciles; any other
 	// strategy drops it, so returning to Canary later starts fresh.
 	liveStable, liveOK := r.Cluster.GetDeployment(key)
@@ -1255,6 +1278,17 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 	status.SetConditionAt(api.Condition{Type: "Ready", Status: boolStatus(phase == api.PhaseAvailable), Reason: reason, Message: msg}, now)
 	status.SetConditionAt(api.Condition{Type: "Progressing", Status: boolStatus(phase == api.PhaseProgressing), Reason: reason, Message: msg}, now)
 	status.SetConditionAt(api.Condition{Type: "Available", Status: boolStatus(phase == api.PhaseAvailable), Reason: reason, Message: msg}, now)
+	// The Paused condition is set on every status write, from the
+	// spec: a resume flips it back to False on the next reconcile,
+	// and a deployment that was never paused reports False from
+	// its first status write (old state files gain the condition
+	// the same way, with the transition stamped now).
+	pausedReason, pausedMsg := "NotPaused", msg
+	if d.Spec.Paused {
+		pausedReason = "Paused"
+		pausedMsg = "reconciliation suspended — resume with `mlop resume " + key + "`"
+	}
+	status.SetConditionAt(api.Condition{Type: "Paused", Status: boolStatus(d.Spec.Paused), Reason: pausedReason, Message: pausedMsg}, now)
 	r.Registry.UpdateStatus(key, status)
 	// Audit trail: record the transition when the generation, the
 	// desired image/version, or the phase changed since the last

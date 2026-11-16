@@ -84,6 +84,20 @@ type ModelDeploymentSpec struct {
 	// operator defaults: anti-affinity on, maxSkew 1, minAvailable
 	// replicas-1.
 	Availability *AvailabilitySpec
+	// Paused suspends reconciliation for this deployment: while
+	// true the operator makes no cluster changes, advances no
+	// rollout, and applies no autoscaling decision — the live
+	// objects keep serving exactly as they are. A paused
+	// deployment keeps its phase and reports a Paused=True
+	// condition; resuming (false) reconciles on the next
+	// invocation and picks up any spec change that landed while
+	// paused. Pausing mid-rollout freezes the rollout state, so
+	// a canary or blue-green rollout resumes from where it
+	// stopped instead of restarting. Apply replaces the whole
+	// spec, so a manifest without paused resumes the deployment
+	// (absent means false) — to change the spec while staying
+	// paused, the manifest must set paused: true.
+	Paused bool
 	// Env holds extra environment variables for the model container.
 	Env map[string]string
 	// Health configures the readiness gate for the model container.

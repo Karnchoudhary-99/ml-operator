@@ -257,3 +257,32 @@ func TestParseQuotedValues(t *testing.T) {
 		t.Errorf("image = %q", d.Spec.Model.Image)
 	}
 }
+
+// TestParsePaused: spec.paused parses from YAML and JSON, defaults
+// to false when absent, and a non-boolean value is a parse error.
+func TestParsePaused(t *testing.T) {
+	d, err := Parse([]byte("name: x\nspec:\n  paused: true\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !d.Spec.Paused {
+		t.Fatal("paused: true should parse as Paused=true")
+	}
+	d, err = Parse([]byte(`{"name":"x","spec":{"paused":true}}`))
+	if err != nil {
+		t.Fatalf("Parse JSON: %v", err)
+	}
+	if !d.Spec.Paused {
+		t.Fatal("JSON paused: true should parse as Paused=true")
+	}
+	d, err = Parse([]byte("name: x\nspec:\n  model:\n    image: img:v1\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if d.Spec.Paused {
+		t.Fatal("absent paused should default to false")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  paused: sometimes\n")); err == nil {
+		t.Fatal("non-boolean paused should be a parse error")
+	}
+}

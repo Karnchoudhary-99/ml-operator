@@ -75,6 +75,15 @@ func (r *Registry) Register(d api.ModelDeployment) (*Entry, bool) {
 			snapshot := *existing
 			return &snapshot, true
 		}
+		// Status is owned by the reconciler, not by whoever
+		// registers a spec: a re-registration carries a zero
+		// status (a parsed manifest has none), and overwriting
+		// it would wipe the phase, the conditions, and the
+		// rollback target. Keep the stored status; only the spec
+		// and generation move. (Inserting a new key keeps the
+		// status as given — Restore re-registers deployments
+		// from the state file with their status included.)
+		d.Status = existing.Deployment.Status
 		existing.Deployment = d
 		existing.Revision++
 	} else {
@@ -223,6 +232,13 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 		return false
 	}
 	if a.Port != b.Port || a.Strategy != b.Strategy {
+		return false
+	}
+	// Pausing is a spec change: toggling it must bump the
+	// generation, or `mlop apply` of a paused manifest would
+	// call it unchanged and the reconciler would never see
+	// the new value.
+	if a.Paused != b.Paused {
 		return false
 	}
 	if (a.Canary == nil) != (b.Canary == nil) {

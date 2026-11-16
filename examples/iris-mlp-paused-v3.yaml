@@ -1,0 +1,26 @@
+# A v3 manifest that keeps the deployment paused: applying it
+# registers the new image and bumps the generation, but the
+# reconciler holds the change until `mlop resume` runs. Use it to
+# stage a rollout while the operator is frozen — for example, to
+# line up a change during an incident freeze and apply it later
+# with a single resume.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v3
+    framework: onnx
+    version: v3
+  replicas: 2
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  paused: true

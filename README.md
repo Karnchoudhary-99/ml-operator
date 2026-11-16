@@ -35,6 +35,7 @@ with the desired state.
 - [x] Wait for a rollout (`mlop watch`, text + JSON stream, `--all`)
 - [x] Batch apply (`mlop apply -d dir`, per-file errors + summary, `--dry-run`)
 - [x] Deployment hardening (PodDisruptionBudget, pod anti-affinity, topology spread)
+- [x] Pause / resume reconciliation (`spec.paused`, `mlop pause` / `mlop resume`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -264,7 +265,7 @@ cluster until the controller-runtime phase).
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`, `watch`, `crd`, `install`)
+- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`, `pause`, `resume`, `watch`, `crd`, `install`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
 - `internal/crd` — CRD + install manifest generation (no external deps)
 - `internal/manifest` — YAML/JSON manifest parsing (no external deps)
@@ -409,9 +410,25 @@ promotion or direct rolling/recreate update). `mlop rollback
 the deployment's normal strategy: a canary rollback is itself
 canary-gated, and the version being rolled back from becomes the
 new previous image, so a second rollback returns to it. It refuses
-when there is no previous version yet, or the deployment already
-serves it. `mlop status <name>` shows the rollback target, and
+when there is no previous version yet, when the deployment already
+serves it, or when the deployment is paused (resume it first).
+`mlop status <name>` shows the rollback target, and
 `examples/rollback-tour.sh` walks the whole story end to end.
+
+### Pausing reconciliation
+
+`mlop pause <name>` suspends reconciliation: the operator makes no
+cluster changes, advances no rollout, and applies no autoscaling
+decision while the deployment is paused — the live objects keep
+serving as they are, the phase is preserved, and status reports a
+`Paused: True` condition. `mlop resume <name>` clears the pause and
+reconciles immediately. The same flag lives in the manifest as
+`spec.paused: true`, so a change can be staged while paused and
+applied on resume — but a manifest *without* `paused` resumes the
+deployment, because apply replaces the whole spec. `mlop watch`
+refuses a paused deployment instead of waiting on a phase that
+cannot arrive. `examples/pause-tour.sh` walks the whole story end
+to end.
 
 ### Autoscaling
 

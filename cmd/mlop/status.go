@@ -37,6 +37,7 @@ type statusDetailView struct {
 	PreviousImage      string                `json:"previousImage,omitempty"`
 	PreviousVersion    string                `json:"previousVersion,omitempty"`
 	Strategy           api.RolloutStrategy   `json:"strategy"`
+	Paused             bool                  `json:"paused"`
 	Autoscaling        *api.AutoscalingSpec  `json:"autoscaling,omitempty"`
 	Availability       *api.AvailabilitySpec `json:"availability,omitempty"`
 	Message            string                `json:"message"`
@@ -144,7 +145,7 @@ func cmdStatus(opts *options, args []string) int {
 			Phase: d.Status.Phase, Ready: d.Status.ReadyReplicas, Desired: desiredReplicas(d),
 			Image: d.Spec.Model.Image, Framework: d.Spec.Model.Framework, Version: d.Spec.Model.Version,
 			PreviousImage: d.Status.PreviousImage, PreviousVersion: d.Status.PreviousVersion,
-			Strategy: d.Spec.Strategy, Autoscaling: d.Spec.Autoscaling,
+			Strategy: d.Spec.Strategy, Paused: d.Spec.Paused, Autoscaling: d.Spec.Autoscaling,
 			Availability: d.Spec.Availability,
 			Message:      d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
@@ -166,6 +167,9 @@ func cmdStatus(opts *options, args []string) int {
 		fmt.Fprintf(opts.stdout, "previous:   %s (%s) — mlop rollback restores this\n", d.Status.PreviousImage, d.Status.PreviousVersion)
 	}
 	fmt.Fprintf(opts.stdout, "strategy:   %s\n", d.Spec.Strategy)
+	if d.Spec.Paused {
+		fmt.Fprintf(opts.stdout, "paused:     yes — reconciliation suspended (mlop resume %s)\n", d.Name)
+	}
 	if d.Spec.Autoscaling != nil {
 		fmt.Fprintf(opts.stdout, "autoscaling: min %d, max %d, cpu %d%%, rps %d\n",
 			d.Spec.Autoscaling.MinReplicas, d.Spec.Autoscaling.MaxReplicas,
