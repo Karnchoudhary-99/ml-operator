@@ -3,6 +3,8 @@ package controller
 import (
 	"strings"
 	"testing"
+
+	"github.com/Karnchoudhary-99/ml-operator/internal/metrics"
 )
 
 // repairResource finds one resource in a repair report, failing
@@ -178,6 +180,54 @@ func TestRepairDryRunChangesNothing(t *testing.T) {
 	}
 	if after, err := rec.Drift("default/iris-mlp"); err != nil || after.InSync {
 		t.Fatalf("drift after dry run: inSync=%v err=%v, want still drifted", after.InSync, err)
+	}
+}
+
+func TestRepairRecordsMetrics(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	reg.Register(dep("iris-mlp", 1))
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// One drifted object to fix, one unexpected object to leave.
+	live, _ := cluster.GetDeployment("default/iris-mlp")
+	live.Container.Image = "registry.example.com/iris-mlp:v99"
+	if err := cluster.ApplyDeployment(live); err != nil {
+		t.Fatalf("ApplyDeployment: %v", err)
+	}
+	canary := live
+	canary.Name = "iris-mlp-canary"
+	if err := cluster.ApplyDeployment(canary); err != nil {
+		t.Fatalf("ApplyDeployment: %v", err)
+	}
+
+	if _, err := rec.Repair("default/iris-mlp", false); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	if got := rec.Metrics.Counter(metrics.MetricRepairsTotal, "outcome", "repaired"); got != 1 {
+		t.Fatalf("repaired counter = %v, want 1", got)
+	}
+	if got := rec.Metrics.Counter(metrics.MetricRepairsTotal, "outcome", "left"); got != 1 {
+		t.Fatalf("left counter = %v, want 1", got)
+	}
+	if got := rec.Metrics.Counter(metrics.MetricRepairsTotal, "outcome", "failed"); got != 0 {
+		t.Fatalf("failed counter = %v, want 0", got)
+	}
+	if !strings.Contains(rec.Metrics.Render(), `ml_operator_repairs_total{outcome="repaired"} 1`) {
+		t.Fatalf("Render() missing the repairs series:\n%s", rec.Metrics.Render())
+	}
+
+	// A dry run counts nothing, even when it would repair.
+	live, _ = cluster.GetDeployment("default/iris-mlp")
+	live.Container.Image = "registry.example.com/iris-mlp:v99"
+	if err := cluster.ApplyDeployment(live); err != nil {
+		t.Fatalf("ApplyDeployment: %v", err)
+	}
+	if _, err := rec.Repair("default/iris-mlp", true); err != nil {
+		t.Fatalf("Repair dry-run: %v", err)
+	}
+	if got := rec.Metrics.Counter(metrics.MetricRepairsTotal, "outcome", "repaired"); got != 1 {
+		t.Fatalf("repaired counter after dry run = %v, want still 1", got)
 	}
 }
 

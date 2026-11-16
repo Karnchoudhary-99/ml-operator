@@ -158,6 +158,7 @@ func (r *Reconciler) Repair(key string, dryRun bool) (DeploymentRepair, error) {
 				Detail: "paused — resume with `mlop resume " + key + "` before repairing",
 			})
 		}
+		r.recordRepairMetrics(rep)
 		return rep, nil
 	}
 
@@ -270,7 +271,28 @@ func (r *Reconciler) Repair(key string, dryRun bool) (DeploymentRepair, error) {
 		msg := fmt.Sprintf("drift repaired: %d %s restored to desired state", fixed, plural(fixed, "object", "objects"))
 		r.recordEvent(key, metrics.EventNormal, "DriftRepaired", msg)
 	}
+	r.recordRepairMetrics(rep)
 	return rep, nil
+}
+
+// recordRepairMetrics counts what repair did, by outcome, for the
+// Prometheus endpoint. A dry run counts nothing: it changed
+// nothing. Unchanged and would-repair results are not outcomes,
+// so they are skipped.
+func (r *Reconciler) recordRepairMetrics(rep DeploymentRepair) {
+	if r.Metrics == nil || rep.DryRun {
+		return
+	}
+	for _, res := range rep.Results {
+		switch res.Outcome {
+		case RepairFixed:
+			r.Metrics.Inc(metrics.MetricRepairsTotal, 1, "outcome", "repaired")
+		case RepairLeft:
+			r.Metrics.Inc(metrics.MetricRepairsTotal, 1, "outcome", "left")
+		case RepairFailed:
+			r.Metrics.Inc(metrics.MetricRepairsTotal, 1, "outcome", "failed")
+		}
+	}
 }
 
 // RepairAll repairs every registered deployment, in key order. An
