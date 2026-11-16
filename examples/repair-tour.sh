@@ -141,5 +141,33 @@ tamper_image
 expect "repaired: default/iris-mlp" "$MLOP" --state "$STATE" repair iris-mlp
 expect "in sync: default/iris-mlp" "$MLOP" --state "$STATE" drift iris-mlp
 
+step "repair --all fixes every deployment at once"
+sed 's/iris-mlp/house-price/g' examples/iris-mlp.yaml > "$WORK/house-price.yaml"
+"$MLOP" --state "$STATE" apply -f "$WORK/house-price.yaml"
+"$MLOP" --state "$STATE" ready house-price --replicas 2
+python3 - "$STATE" <<'PYEOF'
+import json, sys
+state = json.load(open(sys.argv[1]))
+for key in ("default/iris-mlp", "default/house-price"):
+    state["cluster"]["Deployments"][key]["Container"]["Image"] = "registry.example.com/tampered:v99"
+json.dump(state, open(sys.argv[1], "w"), indent=2)
+PYEOF
+expect_exit 1 "drift: default/house-price" "$MLOP" --state "$STATE" drift --all
+all_out=""
+all_rc=0
+all_out="$("$MLOP" --state "$STATE" repair --all)" && all_rc=0 || all_rc=$?
+if [ "$all_rc" -ne 0 ]; then
+	echo "expected exit 0 from repair --all, got $all_rc" >&2
+	exit 1
+fi
+for pat in "repaired: default/iris-mlp" "repaired: default/house-price"; do
+	if ! printf '%s\n' "$all_out" | grep -q -- "$pat"; then
+		echo "expected $pat in repair --all output, got:" >&2
+		echo "$all_out" >&2
+		exit 1
+	fi
+done
+expect "in sync: default/iris-mlp" "$MLOP" --state "$STATE" drift --all
+
 echo
 echo "tour passed: repair fixed an image swap and a deleted Service, left a leftover canary standing, and refused a paused deployment."
