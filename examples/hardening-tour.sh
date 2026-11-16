@@ -42,10 +42,10 @@ expect "availability: minAvailable 2/3" "$MLOP" --state "$STATE" status iris-mlp
 
 step "an invalid availability block is rejected at apply time"
 sed 's/minAvailable: 2/minAvailable: 3/' examples/iris-mlp-hardened.yaml > "$WORK/blocked.yaml"
-if "$MLOP" --state "$STATE" apply -f "$WORK/blocked.yaml" 2>/tmp/apply-err.txt; then
+if "$MLOP" --state "$STATE" apply -f "$WORK/blocked.yaml" 2>"$WORK/apply-err.txt"; then
   echo "expected minAvailable == replicas to be rejected" >&2; exit 1
 fi
-grep -q "must be < replicas" /tmp/apply-err.txt
+grep -q "must be < replicas" "$WORK/apply-err.txt"
 
 echo
 echo "tour passed: PDB follows the replica count, diff previews it, invalid blocks are rejected."
