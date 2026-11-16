@@ -291,16 +291,26 @@ cluster until the controller-runtime phase).
 ## Layout
 
 - `cmd/operator` — operator entrypoint (flags, graceful shutdown)
-- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `rollout`, `ready`, `load`, `rollback`, `pause`, `resume`, `watch`, `crd`, `install`)
+- `cmd/mlop` — CLI client (`apply`, `validate`, `diff`, `status`, `logs`, `history`, `rollout`, `ready`, `load`, `rollback`, `pause`, `resume`, `watch`, `backup`, `restore`, `crd`, `install`, `completion`, `version`)
 - `internal/api` — `ModelDeployment` types, validation, defaults
-- `internal/crd` — CRD + install manifest generation (no external deps)
-- `internal/manifest` — YAML/JSON manifest parsing (no external deps)
-- `internal/store` — JSON state file shared between mlop invocations
-- `internal/registry` — in-memory model registry + watch
+- `internal/autoscale` — HPA decision from CPU / request-rate / GPU signals
+- `internal/backup` — state backup + restore (checksummed)
+- `internal/completion` — shell completion scripts (bash, zsh, fish)
+- `internal/config` — operator configuration (file + env + flags)
 - `internal/controller` — reconciler (diff, apply plan, rollout)
+- `internal/crd` — CRD + install manifest generation (no external deps)
+- `internal/history` — deployment history audit trail
+- `internal/manifest` — YAML/JSON manifest parsing (no external deps)
+- `internal/metrics` — Prometheus metrics, events
+- `internal/registry` — in-memory model registry + watch
 - `internal/render` — Deployment / Service / HPA rendering
 - `internal/rollout` — canary weight ladder, health gate, rollout state machine
-- `internal/metrics` — Prometheus metrics, events
+- `internal/server` — metrics + health HTTP endpoint
+- `internal/store` — JSON state file shared between mlop invocations
+- `docs/` — `architecture.md` (design), `operations.md` (runbook), `troubleshooting.md` (symptom-first fixes)
+- `examples/` — manifests and `*-tour.sh` end-to-end smoke tests
+- `CONTRIBUTING.md` — workflow, pre-push checklist, how to add a command
+- `CHANGELOG.md` — notable changes, newest first
 
 ## API reference
 
