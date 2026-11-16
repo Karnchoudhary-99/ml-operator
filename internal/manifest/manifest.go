@@ -84,6 +84,7 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
 		"canary", "blueGreen", "autoscaling", "availability", "env", "health",
+		"paused",
 	}, "spec"); err != nil {
 		return err
 	}
@@ -158,6 +159,14 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 			return err
 		}
 		s.Port = int32(n)
+	}
+
+	if raw, ok := spec["paused"]; ok {
+		b, err := boolField(raw, "spec.paused")
+		if err != nil {
+			return err
+		}
+		s.Paused = b
 	}
 
 	if v, ok, err := strField(spec, "strategy", "spec"); err != nil {
