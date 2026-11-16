@@ -164,6 +164,12 @@ unexpected (present although nothing desires it). `mlop drift` is
 built on it — the read-only half of the plan, for the human who
 changed something out of band and wants to know what moved before
 deciding whether to re-apply or to update the manifest.
+`Reconciler.Repair` is the write half: it takes the drift report,
+runs the plan, and applies only the creates/updates — never the
+deletes, so an unexpected object is reported as left as-is and a
+paused deployment is refused outright — then re-runs drift to
+verify the fix. It never advances a rollout or changes a phase:
+repair fixes objects, not state machines.
 
 ## Rollout state machine
 

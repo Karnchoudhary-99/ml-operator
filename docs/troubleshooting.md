@@ -118,6 +118,36 @@ is a deliberate no-op — same generation, nothing to reconcile —
 so if you expected a change, the manifest did not actually change
 (check the image tag and version, not just the file's mtime).
 
+## `mlop repair` exits 1 with objects "left"
+
+Exit 1 is the honest answer, not a failure: something is still
+unrepaired. Read the lines — each one says why:
+
+- **left (unexpected)** — an object exists that nothing desires
+  (a leftover canary, an HPA after autoscaling was turned off).
+  Repair never deletes these; the deletion is your call. Delete
+  the object yourself, or update the manifest if the live object
+  is the intended state, then repair again. Note that `mlop
+  status` reconciles, and the reconciler *does* garbage-collect
+  leftovers — so a status check between repair and drift can make
+  the unexpected object vanish on its own.
+- **left (drifted/missing) with a paused note** — the deployment
+  is paused, and repair writes nothing while paused. `mlop resume`
+  first; resume reconciles immediately, so the drift may already
+  be gone by the time you repair.
+- **FAILED** — the cluster write errored after the retry budget.
+  Fix the cluster side and repair again; the other objects were
+  still attempted.
+
+## `mlop repair --dry-run` exits 1 on a clean-looking deployment
+
+A dry run exits 1 whenever it *would* have repaired something —
+that is the CI gate, the same as `mlop drift` exiting 1. It writes
+nothing (the state file is byte-identical afterwards), so a 1
+here means "there is drift", not "the dry run broke something".
+Run `mlop drift` to see the drift, then decide: repair it, or
+update the manifest when the live change was the intended one.
+
 ## Commands fail with a JSON error about the state file
 
 The state file is corrupt (a partial write, or a hand-edit gone

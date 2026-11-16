@@ -8,7 +8,7 @@
 //
 //	mlop [--state path] <command> [args]
 //
-// Commands: apply, validate, diff, drift, status, logs, history, rollout, ready, load, rollback, pause, resume, watch, backup, restore, crd, install, completion, version.
+// Commands: apply, validate, diff, drift, repair, status, logs, history, rollout, ready, load, rollback, pause, resume, watch, backup, restore, crd, install, completion, version.
 package main
 
 import (
@@ -60,6 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdDiff(opts, rest[1:])
 	case "drift":
 		return cmdDrift(opts, rest[1:])
+	case "repair":
+		return cmdRepair(opts, rest[1:])
 	case "status":
 		return cmdStatus(opts, rest[1:])
 	case "logs":
@@ -117,6 +119,8 @@ Commands:
   diff <name> | diff -f manifest.yaml [--json]
                                      show the apply plan without changing state
   drift <name> | drift --all [--json] compare live objects against desired state (exit 1 when drift is found)
+  repair <name> | repair --all [--dry-run] [--json]
+                                     restore drifted/missing objects to desired state (never deletes unexpected objects)
   status [name] [--json]             show deployments and their phases
   logs <name> [--tail N] [--json]         show recorded events for a deployment
   history <name> [--tail N] [--json] show the deployment audit trail (generation/phase/image transitions)
