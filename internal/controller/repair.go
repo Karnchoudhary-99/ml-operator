@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/metrics"
 )
 
@@ -259,12 +258,12 @@ func (r *Reconciler) Repair(key string, dryRun bool) (DeploymentRepair, error) {
 	})
 
 	if !dryRun && fixed > 0 {
-		phase := ds.d.Status.Phase
-		if phase == "" {
-			phase = api.PhasePending
-		}
+		// History tracks generation/phase/image transitions, and
+		// repair changes none of those — the audit trail entry
+		// would be deduped away as the same transition — so the
+		// repair is recorded as an event only, where it is
+		// visible in `mlop logs`.
 		msg := fmt.Sprintf("drift repaired: %d %s restored to desired state", fixed, plural(fixed, "object", "objects"))
-		r.recordHistory(key, ds.d, phase, msg)
 		r.recordEvent(key, metrics.EventNormal, "DriftRepaired", msg)
 	}
 	return rep, nil
