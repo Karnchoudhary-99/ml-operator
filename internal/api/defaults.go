@@ -16,6 +16,12 @@ const (
 	DefaultHealthPeriod       int32 = 10
 	DefaultCanaryInterval     int32 = 30
 	DefaultAutoscalingMin     int32 = 1
+	// DefaultRunAsUser is the non-root uid every model container
+	// runs as when the manifest sets no security block.
+	DefaultRunAsUser int64 = 10001
+	// DefaultSeccompProfile is the seccomp profile applied to
+	// every model pod when the manifest sets no security block.
+	DefaultSeccompProfile = "RuntimeDefault"
 	// DefaultGateMaxErrorRate is the canary health gate's error
 	// budget when a rollout sets no gate thresholds of its own.
 	DefaultGateMaxErrorRate float64 = 0.05
@@ -94,6 +100,41 @@ func ApplyDefaults(d *ModelDeployment) {
 	} else if spec.Availability.AntiAffinity == nil {
 		spec.Availability.AntiAffinity = boolPtr(true)
 	}
+	// Security defaults: non-root uid 10001, read-only root
+	// filesystem, no privilege escalation, all capabilities
+	// dropped, RuntimeDefault seccomp. A nil spec takes the full
+	// default set; a partial spec keeps the user's values and
+	// fills only the unset fields, so `security: {runAsUser:
+	// 20000}` does not silently turn the read-only rootfs off.
+	if spec.Security == nil {
+		spec.Security = &SecuritySpec{
+			RunAsNonRoot:             boolPtr(true),
+			RunAsUser:                int64Ptr(DefaultRunAsUser),
+			ReadOnlyRootFilesystem:   boolPtr(true),
+			AllowPrivilegeEscalation: boolPtr(false),
+			DropCapabilities:         []string{"ALL"},
+			SeccompProfile:           DefaultSeccompProfile,
+		}
+	} else {
+		if spec.Security.RunAsNonRoot == nil {
+			spec.Security.RunAsNonRoot = boolPtr(true)
+		}
+		if spec.Security.RunAsUser == nil {
+			spec.Security.RunAsUser = int64Ptr(DefaultRunAsUser)
+		}
+		if spec.Security.ReadOnlyRootFilesystem == nil {
+			spec.Security.ReadOnlyRootFilesystem = boolPtr(true)
+		}
+		if spec.Security.AllowPrivilegeEscalation == nil {
+			spec.Security.AllowPrivilegeEscalation = boolPtr(false)
+		}
+		if len(spec.Security.DropCapabilities) == 0 {
+			spec.Security.DropCapabilities = []string{"ALL"}
+		}
+		if spec.Security.SeccompProfile == "" {
+			spec.Security.SeccompProfile = DefaultSeccompProfile
+		}
+	}
 	if spec.Health.Path == "" {
 		// Framework-specific defaults: Triton serves readiness on
 		// /v2/health/ready, everything else on /healthz.
@@ -114,6 +155,10 @@ func ApplyDefaults(d *ModelDeployment) {
 // boolPtr returns a pointer to v, for defaulting optional booleans
 // (AvailabilitySpec.AntiAffinity) without a named variable.
 func boolPtr(v bool) *bool { return &v }
+
+// int64Ptr returns a pointer to v, for defaulting optional int64s
+// (SecuritySpec.RunAsUser) without a named variable.
+func int64Ptr(v int64) *int64 { return &v }
 
 // defaultGate returns g with every zero threshold filled from the
 // operator defaults, or a fresh default gate when g is nil. A
