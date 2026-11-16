@@ -40,6 +40,7 @@ type statusDetailView struct {
 	Paused             bool                  `json:"paused"`
 	Autoscaling        *api.AutoscalingSpec  `json:"autoscaling,omitempty"`
 	Availability       *api.AvailabilitySpec `json:"availability,omitempty"`
+	Security           *api.SecuritySpec     `json:"security,omitempty"`
 	Message            string                `json:"message"`
 	Conditions         []api.Condition       `json:"conditions,omitempty"`
 	Requeue            bool                  `json:"requeue"`
@@ -146,8 +147,8 @@ func cmdStatus(opts *options, args []string) int {
 			Image: d.Spec.Model.Image, Framework: d.Spec.Model.Framework, Version: d.Spec.Model.Version,
 			PreviousImage: d.Status.PreviousImage, PreviousVersion: d.Status.PreviousVersion,
 			Strategy: d.Spec.Strategy, Paused: d.Spec.Paused, Autoscaling: d.Spec.Autoscaling,
-			Availability: d.Spec.Availability,
-			Message:      d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
+			Availability: d.Spec.Availability, Security: d.Spec.Security,
+			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
 		enc := json.NewEncoder(opts.stdout)
 		enc.SetIndent("", "  ")
@@ -184,6 +185,18 @@ func cmdStatus(opts *options, args []string) int {
 			desiredReplicas(d),
 			onOff(d.Spec.Availability.AntiAffinityEnabled()),
 			d.Spec.Availability.EffectiveMaxSkew())
+	}
+	if d.Spec.Security != nil {
+		// Effective values again: the line says what the
+		// cluster actually gets, and a relaxed deployment is
+		// visible at a glance instead of hidden in the YAML.
+		fmt.Fprintf(opts.stdout, "security:     runAsNonRoot %s, uid %d, read-only rootfs %s, privilege escalation %s, drop %s, seccomp %s\n",
+			onOff(d.Spec.Security.RunAsNonRootEnabled()),
+			d.Spec.Security.EffectiveRunAsUser(),
+			onOff(d.Spec.Security.ReadOnlyRootFilesystemEnabled()),
+			onOff(d.Spec.Security.AllowPrivilegeEscalationEnabled()),
+			strings.Join(d.Spec.Security.EffectiveDropCapabilities(), ","),
+			d.Spec.Security.EffectiveSeccompProfile())
 	}
 	fmt.Fprintf(opts.stdout, "message:    %s\n", d.Status.Message)
 	if len(d.Status.Conditions) > 0 {
