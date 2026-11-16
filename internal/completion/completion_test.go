@@ -38,7 +38,7 @@ func TestScriptShells(t *testing.T) {
 func TestScriptUnknownShell(t *testing.T) {
 	if _, err := Script("powershell"); err == nil {
 		t.Fatal("Script(powershell) should fail")
-	} else if !strings.Contains(err.Error(), "powershell") || !strings.Contains(err.Error(), "bash") {
+	} else if !strings.Contains(err.Error(), "powershell") || !strings.Contains(err.Error(), "bash, zsh") {
 		t.Fatalf("unknown-shell error %q should name the shell and the valid ones", err)
 	}
 }
@@ -64,5 +64,23 @@ func TestBashScriptSyntax(t *testing.T) {
 		t.Fatalf("source + complete -p: %v\n%s", err, out)
 	} else if !strings.Contains(string(out), "_mlop") {
 		t.Fatalf("completion not registered: %q", out)
+	}
+}
+
+func TestZshScriptSyntax(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	out, err := Script("zsh")
+	if err != nil {
+		t.Fatalf("Script(zsh): %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "mlop.zsh")
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	if out, err := exec.Command(zsh, "-n", path).CombinedOutput(); err != nil {
+		t.Fatalf("zsh -n: %v\n%s", err, out)
 	}
 }

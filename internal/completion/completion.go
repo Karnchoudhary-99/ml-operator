@@ -21,8 +21,9 @@ type Command struct {
 	// positional argument (completed from `mlop __complete-names`).
 	TakesName bool
 	// TakesFile means the positional argument is a file path
-	// (backup/restore take a backup file; apply/validate/diff take
-	// manifests through -f/-d instead).
+	// (backup/restore take a backup file). Manifests for
+	// apply/validate/diff arrive through -f/-d flags instead, which
+	// the flag specs already complete as files.
 	TakesFile bool
 	// Subcommands, e.g. rollout -> ["status"].
 	Subcommands []string
@@ -31,9 +32,9 @@ type Command struct {
 // Commands returns the mlop command table in usage order.
 func Commands() []Command {
 	return []Command{
-		{Name: "apply", Description: "validate + register + reconcile a deployment", Flags: []string{"-f", "-d", "--dry-run"}, TakesFile: true},
-		{Name: "validate", Description: "preflight check a deployment or manifest", Flags: []string{"-f", "--json", "--strict"}, TakesName: true, TakesFile: true},
-		{Name: "diff", Description: "show the apply plan without changing state", Flags: []string{"-f", "--json"}, TakesName: true, TakesFile: true},
+		{Name: "apply", Description: "validate + register + reconcile a deployment", Flags: []string{"-f", "-d", "--dry-run"}},
+		{Name: "validate", Description: "preflight check a deployment or manifest", Flags: []string{"-f", "--json", "--strict"}, TakesName: true},
+		{Name: "diff", Description: "show the apply plan without changing state", Flags: []string{"-f", "--json"}, TakesName: true},
 		{Name: "status", Description: "show deployments and their phases", Flags: []string{"--json"}, TakesName: true},
 		{Name: "logs", Description: "show recorded events for a deployment", Flags: []string{"--tail", "--json"}, TakesName: true},
 		{Name: "history", Description: "show the deployment audit trail", Flags: []string{"--tail", "--json"}, TakesName: true},
@@ -55,9 +56,8 @@ func Commands() []Command {
 }
 
 // Shells returns the shells mlop generates completions for.
-// bash first; zsh and fish follow in their own commits.
 func Shells() []string {
-	return []string{"bash"}
+	return []string{"bash", "zsh"}
 }
 
 // Script renders the completion script for one shell.
@@ -65,6 +65,8 @@ func Script(shell string) (string, error) {
 	switch shell {
 	case "bash":
 		return bashScript(), nil
+	case "zsh":
+		return zshScript(), nil
 	default:
 		return "", fmt.Errorf("unknown shell %q (want one of: %s)", shell, strings.Join(Shells(), ", "))
 	}
