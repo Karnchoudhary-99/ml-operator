@@ -70,7 +70,14 @@ cluster every time, and applies only the difference:
    risky-but-valid specs — untagged or `:latest` images, a canary
    first step over 50%, a gate that can promote with pods unready.
    `mlop validate` exposes both checks without touching state,
-   and `--strict` fails on warnings for CI gates.
+   and `--strict` fails on warnings for CI gates. A paused
+   manifest also warns: applying it freezes the deployment, so
+   the warning is the tripwire against freezing one by accident.
+   Pausing itself is step 1½, right after validation: a paused
+   deployment returns early with its phase preserved and a
+   `Paused: True` condition, before any rollout-state cleanup,
+   autoscaling decision, or cluster write — so a mid-flight
+   rollout resumes from its stored state.
 2. **Rollout state.** A Canary strategy keeps per-generation rollout
    state (weight ladder, step, consecutive failures); a BlueGreen
    strategy keeps its own (soaking/switched, consecutive failures).
