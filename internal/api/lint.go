@@ -38,6 +38,9 @@ func Lint(d *ModelDeployment) []string {
 	if spec.Autoscaling != nil && spec.Autoscaling.MinReplicas == 0 {
 		add("spec.autoscaling.minReplicas is 0, but the operator raises it to 1: this is not scale-to-zero")
 	}
+	if spec.Paused {
+		add("spec.paused is true; the operator will not reconcile this deployment until it is resumed")
+	}
 	warns = append(warns, lintAvailability(spec)...)
 	if spec.Strategy == StrategyCanary && spec.Canary != nil {
 		if spec.Canary.Weight > 50 {

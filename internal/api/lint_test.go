@@ -46,6 +46,7 @@ func TestLint(t *testing.T) {
 		{"autoscaling min zero", func(d *ModelDeployment) {
 			d.Spec.Autoscaling = &AutoscalingSpec{MinReplicas: 0, MaxReplicas: 4, TargetCPUUtilization: 70}
 		}, "minReplicas is 0"},
+		{"paused deployment", func(d *ModelDeployment) { d.Spec.Paused = true }, "paused is true"},
 		{"canary weight over half", func(d *ModelDeployment) {
 			d.Spec.Strategy = StrategyCanary
 			d.Spec.Canary = canary(80, 30, 1.0)
