@@ -336,3 +336,28 @@ func TestSpecsEqualAvailability(t *testing.T) {
 		t.Fatal("nil availability block vs set block should not be equal")
 	}
 }
+
+// TestSpecsEqualPaused: toggling Paused is a spec change — it must
+// bump the generation on apply, or a paused manifest would be
+// reported unchanged and the reconciler would never see the flag.
+func TestSpecsEqualPaused(t *testing.T) {
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Strategy: api.StrategyRolling,
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical unpaused specs should be equal")
+	}
+	b.Paused = true
+	if SpecsEqual(a, b) {
+		t.Fatal("paused vs unpaused specs should not be equal")
+	}
+	a.Paused, b.Paused = true, true
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical paused specs should be equal")
+	}
+}

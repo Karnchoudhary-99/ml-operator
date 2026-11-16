@@ -225,6 +225,13 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.Port != b.Port || a.Strategy != b.Strategy {
 		return false
 	}
+	// Pausing is a spec change: toggling it must bump the
+	// generation, or `mlop apply` of a paused manifest would
+	// call it unchanged and the reconciler would never see
+	// the new value.
+	if a.Paused != b.Paused {
+		return false
+	}
 	if (a.Canary == nil) != (b.Canary == nil) {
 		return false
 	}
