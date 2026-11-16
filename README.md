@@ -39,6 +39,7 @@ with the desired state.
 - [x] Shell completion for `mlop` (bash, zsh, fish — `mlop completion`)
 - [x] Drift detection (`mlop drift`, exit-code CI gate — `internal/controller/drift.go`)
 - [x] Drift repair (`mlop repair`, restores drifted/missing objects, never deletes unexpected ones — `internal/controller/repair.go`)
+- [x] Pod security hardening (`spec.security`: non-root uid, read-only rootfs, no privilege escalation, drop ALL, RuntimeDefault seccomp — hardened by default)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -509,6 +510,43 @@ deployment, because apply replaces the whole spec. `mlop watch`
 refuses a paused deployment instead of waiting on a phase that
 cannot arrive. `examples/pause-tour.sh` walks the whole story end
 to end.
+
+### Pod security
+
+Every serving Deployment is hardened by default — no manifest block
+needed: pods run as non-root uid 10001, the container's root
+filesystem is read-only, privilege escalation is off, all Linux
+capabilities are dropped, and the pod runs under the RuntimeDefault
+seccomp profile. Security is a property of the model, not of one
+revision: canary and green Deployments inherit the same context, so
+a rollout never silently drops the hardening. Override it per
+deployment with `spec.security` (`examples/iris-mlp-secured.yaml`):
+
+```yaml
+spec:
+  security:
+    runAsNonRoot: true
+    runAsUser: 20000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    dropCapabilities: NET_BIND_SERVICE
+    seccompProfile: RuntimeDefault
+```
+
+An explicit list replaces the default `["ALL"]` entirely, so a server
+that needs `NET_BIND_SERVICE` lists exactly that and nothing else —
+and the YAML dialect has no lists, so `dropCapabilities` is a
+comma-separated string there (a real array in JSON manifests). There
+is deliberately no spelling for "drop nothing": an empty list means
+the default, drop ALL. Every explicit relaxation warns on
+`mlop validate` (and `--strict` turns the warning into a failure),
+and a contradiction is rejected at apply time — `runAsUser: 0` with
+`runAsNonRoot: true` would make the kubelet refuse to start the pod.
+`mlop status <name>` shows the effective values
+(`security: runAsNonRoot on, uid 10001, read-only rootfs on,
+privilege escalation off, drop ALL, seccomp RuntimeDefault`), and
+`mlop diff` names each moved field before it applies.
+`examples/security-tour.sh` walks the whole story end to end.
 
 ### Autoscaling
 

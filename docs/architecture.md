@@ -115,6 +115,17 @@ cluster every time, and applies only the difference:
    the replica count (up updates minAvailable, down to one deletes
    the PDB). Deleting the deployment garbage-collects the PDB with
    the rest of its objects.
+
+   Security rides on the same render too: the pod template carries
+   a pod security context (runAsNonRoot, uid 10001, RuntimeDefault
+   seccomp) and the container a security context (read-only root
+   filesystem, no privilege escalation, all capabilities dropped),
+   rendered from `spec.security` with the hardened defaults when
+   the block is absent. Because canary and green Deployments derive
+   from the stable one, they inherit the context — a rollout cannot
+   drop the hardening — and the diff reasons name each moved
+   security field, so drift and `mlop diff` report a security
+   change instead of calling the Deployment in sync.
 5. **Apply.** Each action executes against the `Cluster`
    interface through `retryApply`: a transient cluster error is
    retried with exponential backoff (3 attempts, 100ms base,

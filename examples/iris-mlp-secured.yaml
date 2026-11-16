@@ -1,0 +1,32 @@
+# Minimal ModelDeployment manifest with an explicit security block:
+# uid 20000, read-only root filesystem, no privilege escalation,
+# only NET_BIND_SERVICE kept (everything else dropped — an explicit
+# list replaces the default ["ALL"]), RuntimeDefault seccomp.
+# The operator hardens by default, so this manifest is for a model
+# that needs a different uid or capability set than the defaults.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 2
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  security:
+    runAsNonRoot: true
+    runAsUser: 20000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    dropCapabilities: NET_BIND_SERVICE
+    seccompProfile: RuntimeDefault
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
