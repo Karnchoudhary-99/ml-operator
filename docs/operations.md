@@ -133,6 +133,36 @@ resumes the deployment (absent means false). To change the spec
 while staying paused, the manifest must set `paused: true` —
 `mlop apply` and `mlop validate` both warn about it.
 
+## Detecting drift
+
+```bash
+mlop drift iris-mlp            # exit 0 when in sync, 1 when drift is found
+mlop drift --all               # every registered deployment
+mlop drift iris-mlp --json     # machine-readable report
+```
+
+Drift is the live cluster disagreeing with the desired state: a
+`kubectl edit` that swapped the image, a manual scale, a deleted
+Service, a leftover canary Deployment from a rollout that never
+cleaned up. The report names the object and the field that moved —
+`image "…:v99" -> "…:v1"`, `replicas 1 -> 2` — per Deployment,
+Service, HPA and PodDisruptionBudget, and says whether each object
+is in sync, drifted, missing, or unexpected (present although
+nothing desires it). During a canary or blue-green rollout the
+fields the rollout itself is moving are not reported as drift: the
+stable image is pinned to the live one until promotion, exactly as
+the apply plan does. A paused deployment still reports drift, with
+a note that nothing will correct it until resume.
+
+Drift never changes anything — it is a read, so it is safe in CI
+(the exit code is the gate: 0 in sync, 1 drift found, 2 usage
+error). The fix is a decision, not a command: re-apply the manifest
+when the live change was a mistake, or update the manifest when the
+live change was the intended one and the spec is what is stale.
+`examples/drift-tour.sh` walks through both: an image swap, a
+deleted Service, and a manual scale-down, each caught by drift and
+fixed by a re-apply.
+
 ## Reading the log
 
 ```bash

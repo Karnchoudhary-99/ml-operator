@@ -521,7 +521,29 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 // its stabilization window, so a read-only plan must not ask it);
 // and a canary with no stored rollout state is planned from a fresh
 // first-weight state built locally, never stored.
-func (r *Reconciler) Plan(key string) ([]Action, error) {
+// desiredState is the fully rendered desired world for one
+// deployment: the deployment itself, the fronting Service, the
+// canary/green extras (nil when none is desired), and the HPA/PDB
+// (hasHPA/hasPDB false when disabled). It is what Plan diffs the
+// live cluster against, and what Drift reports on — one computation,
+// so the two can never disagree about what "desired" means.
+type desiredState struct {
+	d          api.ModelDeployment
+	desired    render.Deployment
+	desiredSvc render.Service
+	canary     *render.Deployment
+	green      *render.Deployment
+	desiredHPA render.HPA
+	hasHPA     bool
+	desiredPDB render.PodDisruptionBudget
+	hasPDB     bool
+}
+
+// desired renders the desired state for key without touching the
+// cluster or any rollout state: a fresh rollout state is built when
+// none is stored, never written back. An invalid spec or an
+// unknown key is an error.
+func (r *Reconciler) desired(key string) (*desiredState, error) {
 	entry := r.Registry.Get(key)
 	if entry == nil {
 		return nil, fmt.Errorf("no deployment %q", key)
@@ -593,7 +615,20 @@ func (r *Reconciler) Plan(key string) ([]Action, error) {
 	}
 	desiredHPA, hasHPA := render.HPAFor(d)
 	desiredPDB, hasPDB := render.PDBFor(d)
-	return r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA, desiredPDB, hasPDB), nil
+	return &desiredState{
+		d: d, desired: desired, desiredSvc: desiredSvc,
+		canary: canary, green: green,
+		desiredHPA: desiredHPA, hasHPA: hasHPA,
+		desiredPDB: desiredPDB, hasPDB: hasPDB,
+	}, nil
+}
+
+func (r *Reconciler) Plan(key string) ([]Action, error) {
+	ds, err := r.desired(key)
+	if err != nil {
+		return nil, err
+	}
+	return r.plan(key, ds.d, ds.desired, ds.desiredSvc, ds.canary, ds.green, ds.desiredHPA, ds.hasHPA, ds.desiredPDB, ds.hasPDB), nil
 }
 
 // rolloutState returns the rollout state for key, starting a fresh
