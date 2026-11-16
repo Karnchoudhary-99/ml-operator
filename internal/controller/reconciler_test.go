@@ -409,3 +409,113 @@ func TestConditionsCarryRealReasons(t *testing.T) {
 		t.Fatalf("apply failure: Ready condition = %+v, want reason ApplyFailed", c)
 	}
 }
+
+// TestReconcilePaused freezes a deployment: while Paused is true the
+// reconciler writes nothing to the cluster (not even a spec change
+// that lands mid-pause), keeps the phase, and reports a Paused=True
+// condition. Resuming reconciles normally and applies the change
+// that was held. The ReconciliationPaused event fires once, on the
+// transition into paused — later reconciles must not spam it.
+func TestReconcilePaused(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	reg.Register(dep("iris-mlp", 1))
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	cluster.SetReady("default/iris-mlp", 2)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	if st := reg.Get("default/iris-mlp").Deployment.Status; st.Phase != api.PhaseAvailable {
+		t.Fatalf("before pause: phase=%s, want Available", st.Phase)
+	}
+
+	// Pause at generation 2.
+	paused := dep("iris-mlp", 2)
+	paused.Spec.Paused = true
+	paused.Status = reg.Get("default/iris-mlp").Deployment.Status
+	reg.Register(paused)
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile paused: %v", err)
+	}
+	if len(res.Actions) != 0 {
+		t.Fatalf("paused reconcile applied %v, want no actions", res.Actions)
+	}
+	st := reg.Get("default/iris-mlp").Deployment.Status
+	if st.Phase != api.PhaseAvailable {
+		t.Fatalf("paused: phase=%s, want Available preserved", st.Phase)
+	}
+	if c := st.ConditionFor("Paused"); c == nil || c.Status != "True" || c.Reason != "Paused" {
+		t.Fatalf("paused: Paused condition = %+v, want True/Paused", c)
+	}
+	if evs := rec.Events.EventsFor("default/iris-mlp"); len(evs) != 1 || evs[0].Reason != "ReconciliationPaused" {
+		t.Fatalf("paused: events = %+v, want exactly one ReconciliationPaused", evs)
+	}
+
+	// A spec change while paused is held, not applied.
+	held := dep("iris-mlp", 3)
+	held.Spec.Paused = true
+	held.Spec.Model.Image = "registry.example.com/iris-mlp:v2"
+	held.Spec.Model.Version = "v2"
+	held.Status = st
+	reg.Register(held)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := cluster.GetDeployment("default/iris-mlp")
+	if live.Container.Image != "registry.example.com/iris-mlp:v1" {
+		t.Fatalf("paused: live image = %s, want v1 still serving", live.Container.Image)
+	}
+	if evs := rec.Events.EventsFor("default/iris-mlp"); len(evs) != 1 {
+		t.Fatalf("second paused reconcile recorded another event: %+v", evs)
+	}
+
+	// Resume: the held change applies on the next reconcile.
+	resumed := dep("iris-mlp", 4)
+	resumed.Spec.Model.Image = "registry.example.com/iris-mlp:v2"
+	resumed.Spec.Model.Version = "v2"
+	resumed.Status = reg.Get("default/iris-mlp").Deployment.Status
+	reg.Register(resumed)
+	res, err = rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile resumed: %v", err)
+	}
+	// The fake cluster keeps the replicas ready through the
+	// rolling update, so the resumed deployment is Available
+	// immediately — what matters is the image actually changed.
+	if res.Phase != api.PhaseAvailable {
+		t.Fatalf("resumed: phase=%s, want Available (v2 applied, replicas ready)", res.Phase)
+	}
+	live, _ = cluster.GetDeployment("default/iris-mlp")
+	if live.Container.Image != "registry.example.com/iris-mlp:v2" {
+		t.Fatalf("resumed: live image = %s, want v2", live.Container.Image)
+	}
+	if c := reg.Get("default/iris-mlp").Deployment.Status.ConditionFor("Paused"); c == nil || c.Status != "False" {
+		t.Fatalf("resumed: Paused condition = %+v, want False", c)
+	}
+}
+
+// TestReconcilePausedBeforeFirstDeploy: pausing a deployment that
+// was never provisioned creates nothing in the cluster and keeps
+// the Pending phase.
+func TestReconcilePausedBeforeFirstDeploy(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	d := dep("iris-mlp", 1)
+	d.Spec.Paused = true
+	reg.Register(d)
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Actions) != 0 || cluster.DeploymentCount() != 0 {
+		t.Fatalf("paused fresh deploy: actions=%v deployments=%d, want none/0", res.Actions, cluster.DeploymentCount())
+	}
+	st := reg.Get("default/iris-mlp").Deployment.Status
+	if st.Phase != api.PhasePending {
+		t.Fatalf("paused fresh deploy: phase=%s, want Pending", st.Phase)
+	}
+	if c := st.ConditionFor("Paused"); c == nil || c.Status != "True" {
+		t.Fatalf("paused fresh deploy: Paused condition = %+v, want True", c)
+	}
+}
