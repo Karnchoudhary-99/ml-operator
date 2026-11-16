@@ -16,6 +16,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source examples/tour-lib.sh
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 MLOP="$WORK/mlop"
@@ -26,34 +27,34 @@ step() { echo; echo "=== $* ==="; }
 serve_v1() { # $1 = state file
 	"$MLOP" --state "$1" apply -f examples/iris-mlp.yaml >/dev/null
 	"$MLOP" --state "$1" ready iris-mlp --replicas 2 >/dev/null
-	"$MLOP" --state "$1" status iris-mlp | grep -q "phase:      Available"
+	expect "phase:      Available" "$MLOP" --state "$1" status iris-mlp
 	"$MLOP" --state "$1" apply -f examples/iris-mlp-bluegreen.yaml >/dev/null
 }
 
 step "A. blue-green v2: green soaks beside stable v1"
 STATE_A="$WORK/state-a.json"
 serve_v1 "$STATE_A"
-"$MLOP" --state "$STATE_A" rollout status iris-mlp | grep -q "state:      soaking"
-"$MLOP" --state "$STATE_A" rollout status iris-mlp | grep -q "failures:   0 consecutive gate failures"
+expect "state:      soaking" "$MLOP" --state "$STATE_A" rollout status iris-mlp
+expect "failures:   0 consecutive gate failures" "$MLOP" --state "$STATE_A" rollout status iris-mlp
 # A diff before the cutover previews nothing left to do: green
 # already exists and stable is pinned to v1.
-"$MLOP" --state "$STATE_A" diff iris-mlp | grep -q "in sync"
+expect "in sync" "$MLOP" --state "$STATE_A" diff iris-mlp
 
 step "A. the model is still loading: the rollout holds, no budget burned"
 "$MLOP" --state "$STATE_A" load iris-mlp --green --loading
-"$MLOP" --state "$STATE_A" rollout status iris-mlp | grep -q "state:      soaking"
-"$MLOP" --state "$STATE_A" rollout status iris-mlp | grep -q "failures:   0 consecutive gate failures"
+expect "state:      soaking" "$MLOP" --state "$STATE_A" rollout status iris-mlp
+expect "failures:   0 consecutive gate failures" "$MLOP" --state "$STATE_A" rollout status iris-mlp
 
 step "A. the model loads and the pods are ready: the Service switches to green"
 "$MLOP" --state "$STATE_A" load iris-mlp --green
-"$MLOP" --state "$STATE_A" ready iris-mlp --replicas 2 --green | grep -q "phase=Progressing"
-"$MLOP" --state "$STATE_A" logs iris-mlp | grep -q "BlueGreenSwitched"
+expect "phase=Progressing" "$MLOP" --state "$STATE_A" ready iris-mlp --replicas 2 --green
+expect "BlueGreenSwitched" "$MLOP" --state "$STATE_A" logs iris-mlp
 
 step "A. the next reconcile folds green into stable"
-"$MLOP" --state "$STATE_A" rollout status iris-mlp | grep -q "state:      folded"
-"$MLOP" --state "$STATE_A" status iris-mlp | grep -q "registry.example.com/iris-mlp:v2"
-"$MLOP" --state "$STATE_A" status iris-mlp | grep -q "previous:   registry.example.com/iris-mlp:v1"
-"$MLOP" --state "$STATE_A" logs iris-mlp | grep -q "BlueGreenPromoted"
+expect "state:      folded" "$MLOP" --state "$STATE_A" rollout status iris-mlp
+expect "registry.example.com/iris-mlp:v2" "$MLOP" --state "$STATE_A" status iris-mlp
+expect "previous:   registry.example.com/iris-mlp:v1" "$MLOP" --state "$STATE_A" status iris-mlp
+expect "BlueGreenPromoted" "$MLOP" --state "$STATE_A" logs iris-mlp
 
 step "B. blue-green v2: the model fails to load"
 STATE_B="$WORK/state-b.json"
@@ -61,18 +62,18 @@ serve_v1 "$STATE_B"
 "$MLOP" --state "$STATE_B" load iris-mlp --green --fail
 # Green pods are not ready yet, so the failed load cannot burn
 # budget until there is something to judge.
-"$MLOP" --state "$STATE_B" rollout status iris-mlp | grep -q "failures:   0 consecutive gate failures"
-"$MLOP" --state "$STATE_B" ready iris-mlp --replicas 2 --green | grep -q "phase=Progressing"
+expect "failures:   0 consecutive gate failures" "$MLOP" --state "$STATE_B" rollout status iris-mlp
+expect "phase=Progressing" "$MLOP" --state "$STATE_B" ready iris-mlp --replicas 2 --green
 # Strikes 2 and 3: the third aborts the rollout.
-"$MLOP" --state "$STATE_B" rollout status iris-mlp | grep -q "failures:   2 consecutive gate failures"
-"$MLOP" --state "$STATE_B" rollout status iris-mlp | grep -q "state:      aborted"
+expect "failures:   2 consecutive gate failures" "$MLOP" --state "$STATE_B" rollout status iris-mlp
+expect "state:      aborted" "$MLOP" --state "$STATE_B" rollout status iris-mlp
 
 step "B. stable still serves v1, deployment stays Degraded"
-"$MLOP" --state "$STATE_B" status iris-mlp | grep -q "phase:      Degraded"
-"$MLOP" --state "$STATE_B" status iris-mlp | grep -q "registry.example.com/iris-mlp:v1"
-"$MLOP" --state "$STATE_B" logs iris-mlp | grep -q "BlueGreenAborted"
+expect "phase:      Degraded" "$MLOP" --state "$STATE_B" status iris-mlp
+expect "registry.example.com/iris-mlp:v1" "$MLOP" --state "$STATE_B" status iris-mlp
+expect "BlueGreenAborted" "$MLOP" --state "$STATE_B" logs iris-mlp
 # And the next reconcile does not flip it back to Available.
-"$MLOP" --state "$STATE_B" status iris-mlp | grep -q "phase:      Degraded"
+expect "phase:      Degraded" "$MLOP" --state "$STATE_B" status iris-mlp
 
 echo
 echo "tour passed: green soaks, switches, and folds on a healthy gate; a failed model aborts and blue keeps serving."
