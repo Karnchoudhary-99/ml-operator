@@ -147,6 +147,31 @@ func TestRepairPaused(t *testing.T) {
 	}
 }
 
+func TestRepairAll(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	manifest := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply exit %d", code)
+	}
+	tamperState(t, state)
+
+	code, out, _ := runCLIState(t, state, "repair", "--all")
+	if code != 0 {
+		t.Fatalf("repair --all exit %d, out %q", code, out)
+	}
+	if !strings.Contains(out, "repaired: default/iris-mlp") {
+		t.Fatalf("out should name the repaired deployment, got %q", out)
+	}
+	if code, out, _ := runCLIState(t, state, "drift", "--all"); code != 0 {
+		t.Fatalf("drift --all after repair exit %d, out %q", code, out)
+	}
+
+	// --all on a clean world is a no-op with exit 0.
+	if code, out, _ := runCLIState(t, state, "repair", "--all"); code != 0 || !strings.Contains(out, "in sync: default/iris-mlp") {
+		t.Fatalf("repair --all on clean world exit %d, out %q", code, out)
+	}
+}
+
 func TestRepairUsageAndUnknown(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 	manifest := writeManifest(t, irisV1)
