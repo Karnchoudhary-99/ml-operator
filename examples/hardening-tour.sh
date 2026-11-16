@@ -9,6 +9,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source examples/tour-lib.sh
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 MLOP="$WORK/mlop"
@@ -17,21 +18,6 @@ STATE="$WORK/state.json"
 go build -o "$MLOP" ./cmd/mlop
 
 step() { echo; echo "=== $* ==="; }
-
-# expect runs a command, captures its output, and asserts it
-# contains a pattern. The output is NOT piped into grep -q: grep
-# exits on the match while mlop still writes the lines after it,
-# and under set -o pipefail that SIGPIPE kills the tour — flaky,
-# seen twice in the model-load tour during verification.
-expect() { # expect <pattern> <command...>
-	local pat="$1"; shift
-	local out
-	out="$("$@")"
-	case "$out" in
-		*"$pat"*) ;;
-		*) echo "expected $pat in output of $*, got:" >&2; echo "$out" >&2; exit 1 ;;
-	esac
-}
 
 step "apply the hardened manifest: 3 replicas, minAvailable 2"
 expect "CreatePDB" "$MLOP" --state "$STATE" apply -f examples/iris-mlp-hardened.yaml
