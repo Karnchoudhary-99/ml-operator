@@ -141,3 +141,46 @@ func envValue(env []EnvVar, name string) string {
 	}
 	return ""
 }
+
+// TestDeploymentDiffReasonsModelSource pins that a model
+// source change is a Deployment change: adding a source names
+// the init container, the volume and the mount; changing only
+// the URI names the init container (the download target
+// moved); an identical source is in sync.
+func TestDeploymentDiffReasonsModelSource(t *testing.T) {
+	plain := DeploymentFor(dep())
+	sourced := DeploymentFor(sourcedDep())
+	reasons := DeploymentDiffReasons(sourced, plain)
+	contains := func(want string) bool {
+		for _, r := range reasons {
+			if r == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{
+		"model download init container changed",
+		"model artifact volume changed",
+		"model artifact mount changed",
+	} {
+		if !contains(want) {
+			t.Fatalf("reasons %v, want %q", reasons, want)
+		}
+	}
+	// Same source on both sides: in sync.
+	if reasons := DeploymentDiffReasons(sourced, DeploymentFor(sourcedDep())); len(reasons) != 0 {
+		t.Fatalf("identical sources diff: %v", reasons)
+	}
+	// A different URI changes only the init container: the
+	// volume and the mount are the same.
+	other := sourcedDep()
+	other.Spec.ModelSource.URI = "https://artifacts.example.com/models/iris-mlp-v2.onnx"
+	reasons = DeploymentDiffReasons(DeploymentFor(other), sourced)
+	if !contains("model download init container changed") {
+		t.Fatalf("reasons %v, want the init container change", reasons)
+	}
+	if contains("model artifact volume changed") || contains("model artifact mount changed") {
+		t.Fatalf("reasons %v, volume and mount did not change", reasons)
+	}
+}

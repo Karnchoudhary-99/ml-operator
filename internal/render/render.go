@@ -542,6 +542,20 @@ func DeploymentDiffReasons(desired, live Deployment) []string {
 	if !tolerationsEqual(desired.Tolerations, live.Tolerations) {
 		reasons = append(reasons, "tolerations changed")
 	}
+	// A model source is rendered onto every Deployment too:
+	// a new, removed or changed source changes the init
+	// container, the shared volume and the serving
+	// container's mount, so the reconciler must re-apply
+	// and `mlop diff` must name it.
+	if !initContainersEqual(desired.InitContainers, live.InitContainers) {
+		reasons = append(reasons, "model download init container changed")
+	}
+	if !volumesEqual(desired.Volumes, live.Volumes) {
+		reasons = append(reasons, "model artifact volume changed")
+	}
+	if !volumeMountsEqual(desired.Container.VolumeMounts, live.Container.VolumeMounts) {
+		reasons = append(reasons, "model artifact mount changed")
+	}
 	return reasons
 }
 
@@ -720,6 +734,51 @@ func envHas(env []EnvVar, name string) bool {
 		}
 	}
 	return false
+}
+
+// initContainersEqual compares init containers by the fields
+// the operator renders: name, image, command, env and volume
+// mounts. A change in any of them means the pod's startup
+// behaviour changed.
+func initContainersEqual(a, b []Container) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].Image != b[i].Image ||
+			!stringSliceEqual(a[i].Command, b[i].Command) ||
+			!envEqual(a[i].Env, b[i].Env) ||
+			!volumeMountsEqual(a[i].VolumeMounts, b[i].VolumeMounts) {
+			return false
+		}
+	}
+	return true
+}
+
+// volumesEqual compares pod volumes by name and kind.
+func volumesEqual(a, b []Volume) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// volumeMountsEqual compares volume mounts by name and path.
+func volumeMountsEqual(a, b []VolumeMount) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // copyStringMap copies a label map, or nil when the input is nil,
