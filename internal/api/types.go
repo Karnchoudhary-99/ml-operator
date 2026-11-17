@@ -131,6 +131,18 @@ type ModelDeploymentSpec struct {
 	// source is a real choice (weights in the image), not an
 	// omission, so ApplyDefaults leaves it alone.
 	ModelSource *ModelSourceSpec
+	// ImagePullSecrets names the Kubernetes secrets holding
+	// registry credentials for pulling the serving image
+	// (e.g. a docker-registry secret for a private registry).
+	// Empty means the pods pull without credentials: public
+	// images, or a registry that trusts the node's own
+	// credentials. Like placement and modelSource, it is a
+	// property of the model, not of one revision: canary and
+	// green Deployments inherit it, so a rollout never fails
+	// to pull the new image for want of credentials. It has
+	// no operator defaults: an absent list is a real choice,
+	// so ApplyDefaults leaves it alone.
+	ImagePullSecrets []string
 	// Paused suspends reconciliation for this deployment: while
 	// true the operator makes no cluster changes, advances no
 	// rollout, and applies no autoscaling decision — the live
@@ -550,6 +562,17 @@ func (m *ModelSourceSpec) Describe() string {
 		verified = "sha256: " + m.SHA256[:12] + "… verified"
 	}
 	return fmt.Sprintf("%s -> %s (%s)", m.URI, m.ArtifactPath(), verified)
+}
+
+// DescribeImagePullSecrets renders pull-secret names as one
+// comma-separated line for `mlop status`, e.g. "regcred,
+// ghcr-creds". An empty list describes as "none" — the pods
+// pull without credentials.
+func DescribeImagePullSecrets(secrets []string) string {
+	if len(secrets) == 0 {
+		return "none"
+	}
+	return strings.Join(secrets, ", ")
 }
 
 // Toleration mirrors the Kubernetes corev1.Toleration, trimmed

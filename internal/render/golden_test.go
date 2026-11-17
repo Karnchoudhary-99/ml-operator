@@ -166,3 +166,30 @@ func TestGoldenSourcedCanaryDeployment(t *testing.T) {
 func TestGoldenSourcedGreenDeployment(t *testing.T) {
 	checkGolden(t, "sourced-green.json", GreenDeploymentFor(sourcedCanonicalDeployment()))
 }
+
+// secretedCanonicalDeployment is the canonical deployment
+// with image pull secrets: the same iris-mlp v1, 2 replicas,
+// autoscaling on and canary configured, but the pods pull the
+// image with registry credentials.
+func secretedCanonicalDeployment() api.ModelDeployment {
+	d := canonicalDeployment()
+	d.Spec.ImagePullSecrets = []string{"regcred", "ghcr-creds"}
+	return d
+}
+
+// TestGoldenSecretedDeployment pins the rendered objects for a
+// deployment with pull secrets: the secret names on the pod
+// template of the stable, canary and green Deployments alike.
+// Any accidental change to what the operator would apply shows
+// up here first.
+func TestGoldenSecretedDeployment(t *testing.T) {
+	checkGolden(t, "secreted-deployment.json", DeploymentFor(secretedCanonicalDeployment()))
+}
+
+func TestGoldenSecretedCanaryDeployment(t *testing.T) {
+	checkGolden(t, "secreted-canary.json", CanaryDeploymentForWeight(secretedCanonicalDeployment(), 10))
+}
+
+func TestGoldenSecretedGreenDeployment(t *testing.T) {
+	checkGolden(t, "secreted-green.json", GreenDeploymentFor(secretedCanonicalDeployment()))
+}

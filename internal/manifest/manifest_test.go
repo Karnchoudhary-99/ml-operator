@@ -485,3 +485,41 @@ func TestParseModelSource(t *testing.T) {
 		t.Fatal("non-string uri should be a parse error")
 	}
 }
+
+// TestParseImagePullSecrets pins the pull-secret list in both
+// dialects: the YAML dialect writes a comma-separated string,
+// JSON carries a real array, and both parse to the same list.
+// A non-string entry and an empty entry are parse errors.
+func TestParseImagePullSecrets(t *testing.T) {
+	d, err := Parse([]byte("name: x\nspec:\n  imagePullSecrets: regcred, ghcr-creds\n"))
+	if err != nil {
+		t.Fatalf("parse YAML imagePullSecrets: %v", err)
+	}
+	if got := d.Spec.ImagePullSecrets; len(got) != 2 || got[0] != "regcred" || got[1] != "ghcr-creds" {
+		t.Fatalf("YAML imagePullSecrets = %v", got)
+	}
+	d, err = Parse([]byte(`{"name":"x","spec":{"imagePullSecrets":["regcred","ghcr-creds"]}}`))
+	if err != nil {
+		t.Fatalf("parse JSON imagePullSecrets: %v", err)
+	}
+	if got := d.Spec.ImagePullSecrets; len(got) != 2 || got[0] != "regcred" || got[1] != "ghcr-creds" {
+		t.Fatalf("JSON imagePullSecrets = %v", got)
+	}
+	// A single name parses to a one-element list.
+	d, err = Parse([]byte("name: x\nspec:\n  imagePullSecrets: regcred\n"))
+	if err != nil {
+		t.Fatalf("parse single imagePullSecret: %v", err)
+	}
+	if got := d.Spec.ImagePullSecrets; len(got) != 1 || got[0] != "regcred" {
+		t.Fatalf("single imagePullSecrets = %v", got)
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  imagePullSecrets: regcred, , ghcr-creds\n")); err == nil {
+		t.Fatal("empty entry should be a parse error")
+	}
+	if _, err := Parse([]byte(`{"name":"x","spec":{"imagePullSecrets":["regcred",42]}}`)); err == nil {
+		t.Fatal("non-string entry should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  imagePullSecrets: 42\n")); err == nil {
+		t.Fatal("non-string/list value should be a parse error")
+	}
+}

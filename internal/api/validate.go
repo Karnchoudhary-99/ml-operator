@@ -42,6 +42,7 @@ func Validate(d *ModelDeployment) []error {
 	errs = append(errs, validateSecurity(spec)...)
 	errs = append(errs, validatePlacement(spec)...)
 	errs = append(errs, validateModelSource(spec)...)
+	errs = append(errs, validateImagePullSecrets(spec)...)
 	errs = append(errs, validateEnv(spec.Env)...)
 	errs = append(errs, validateHealth(spec.Health)...)
 
@@ -332,6 +333,33 @@ func isSHA256Hex(s string) bool {
 		}
 	}
 	return true
+}
+
+// validateImagePullSecrets checks the pull-secret names. An
+// empty list is valid — public images pull without
+// credentials. Each name must be a DNS-1123 subdomain, the
+// same rule Kubernetes applies to secret names: a bad name
+// would be rejected by the API server at apply time, so the
+// operator rejects it first. Duplicates are rejected too: the
+// same secret twice is a typo, not a configuration.
+func validateImagePullSecrets(spec ModelDeploymentSpec) []error {
+	var errs []error
+	seen := make(map[string]bool, len(spec.ImagePullSecrets))
+	for i, name := range spec.ImagePullSecrets {
+		path := fmt.Sprintf("spec.imagePullSecrets[%d]", i)
+		if strings.TrimSpace(name) == "" {
+			errs = append(errs, fmt.Errorf("%s must not be empty", path))
+			continue
+		}
+		if !isDNS1123Subdomain(name) {
+			errs = append(errs, fmt.Errorf("%s %q must be a DNS-1123 subdomain (lowercase letters, digits, '-', '.')", path, name))
+		}
+		if seen[name] {
+			errs = append(errs, fmt.Errorf("%s duplicates secret %q", path, name))
+		}
+		seen[name] = true
+	}
+	return errs
 }
 
 // validateToleration checks one toleration against the

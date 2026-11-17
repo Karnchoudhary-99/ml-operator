@@ -427,6 +427,22 @@ source change, and `mlop validate` warns about an unverified
 download or a mount path of `/`. `examples/model-source-tour.sh`
 drives all of it end to end.
 
+## Image pull secrets
+
+`spec.imagePullSecrets` names the Kubernetes secrets holding
+registry credentials for pulling the serving image. The YAML
+dialect writes a comma-separated string (`regcred, ghcr-creds`)
+while JSON manifests carry a real array — both parse to the same
+list, and `mlop status` prints the comma-separated form, so its
+output pastes straight back into a manifest. Empty means the
+pods pull without credentials. The secrets render onto the pod
+template of the stable, canary and green Deployments alike,
+`mlop diff` names a rotation, and the state round trip preserves
+them in both the registry spec and the rendered Deployment, so
+an operator restart never drops the credentials off the pod
+template. `examples/image-pull-secrets-tour.sh` drives all of
+it end to end.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a
@@ -655,14 +671,14 @@ state file than the one you applied to.
 
 ## End-to-end tours
 
-The eighteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The nineteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
 ready, canary or blue-green rollout, rollback, scale, pause/resume,
 backup/restore, batch apply, hardening, shell completion,
 maintenance windows, pod placement, traffic simulation, model
-source) and asserts the output at
+source, image pull secrets) and asserts the output at
 every step, so a tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all eighteen on
+(`examples/mlop-tour.sh`) or all of them; CI runs all nineteen on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`

@@ -79,6 +79,7 @@
   ],
   "NodeSelector": null,
   "Tolerations": null,
+  "ImagePullSecrets": null,
   "InitContainers": [
     {
       "Name": "model-download",

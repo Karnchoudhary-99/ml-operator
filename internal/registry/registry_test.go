@@ -644,3 +644,51 @@ func TestSpecsEqualModelSource(t *testing.T) {
 		t.Fatal("nil modelSource vs set block should not be equal")
 	}
 }
+
+// TestSpecsEqualImagePullSecrets: a pull-secret-only change
+// is a spec change — it must bump the generation on apply, or
+// the reconciler would keep pulling with the old credentials.
+// Same class as the placement bug: a field SpecsEqual ignores
+// is a field the operator silently never updates.
+func TestSpecsEqualImagePullSecrets(t *testing.T) {
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:            api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:             8080,
+			Replicas:         func() *int32 { v := int32(3); return &v }(),
+			Strategy:         api.StrategyRolling,
+			ImagePullSecrets: []string{"regcred", "ghcr-creds"},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical pull secrets should be equal")
+	}
+	// Same values through fresh slices must still be equal.
+	b = base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("pull secrets with equal values but fresh slices should be equal")
+	}
+	for _, mutate := range []struct {
+		name string
+		f    func(*api.ModelDeploymentSpec)
+	}{
+		{"secret added", func(s *api.ModelDeploymentSpec) { s.ImagePullSecrets = append(s.ImagePullSecrets, "extra") }},
+		{"secret removed", func(s *api.ModelDeploymentSpec) { s.ImagePullSecrets = s.ImagePullSecrets[:1] }},
+		{"secret rotated", func(s *api.ModelDeploymentSpec) { s.ImagePullSecrets[0] = "regcred-v2" }},
+		{"secrets cleared", func(s *api.ModelDeploymentSpec) { s.ImagePullSecrets = nil }},
+	} {
+		b = base()
+		mutate.f(&b)
+		if SpecsEqual(a, b) {
+			t.Fatalf("different %s should not be equal", mutate.name)
+		}
+	}
+	// An empty list and a nil list are the same: no secrets.
+	a.ImagePullSecrets = []string{}
+	b = base()
+	b.ImagePullSecrets = nil
+	if !SpecsEqual(a, b) {
+		t.Fatal("empty and nil pull-secret lists should be equal")
+	}
+}

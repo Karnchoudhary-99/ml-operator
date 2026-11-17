@@ -67,6 +67,7 @@ type statusDetailView struct {
 	Security           *api.SecuritySpec          `json:"security,omitempty"`
 	Placement          *api.PlacementSpec         `json:"placement,omitempty"`
 	ModelSource        *api.ModelSourceSpec       `json:"modelSource,omitempty"`
+	ImagePullSecrets   []string                   `json:"imagePullSecrets,omitempty"`
 	Traffic            *trafficView               `json:"traffic,omitempty"`
 	CanaryTraffic      *trafficView               `json:"canaryTraffic,omitempty"`
 	GreenTraffic       *trafficView               `json:"greenTraffic,omitempty"`
@@ -193,7 +194,8 @@ func cmdStatus(opts *options, args []string) int {
 			Autoscaling:  d.Spec.Autoscaling,
 			Availability: d.Spec.Availability, Security: d.Spec.Security,
 			Placement: d.Spec.Placement, ModelSource: d.Spec.ModelSource,
-			Traffic: traffic, CanaryTraffic: canaryTraffic, GreenTraffic: greenTraffic,
+			ImagePullSecrets: d.Spec.ImagePullSecrets,
+			Traffic:          traffic, CanaryTraffic: canaryTraffic, GreenTraffic: greenTraffic,
 			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
 		enc := json.NewEncoder(opts.stdout)
@@ -267,6 +269,12 @@ func cmdStatus(opts *options, args []string) int {
 		// it lands, and whether the download is verified — the
 		// three facts an operator needs at a glance.
 		fmt.Fprintf(opts.stdout, "modelSource:  %s\n", d.Spec.ModelSource.Describe())
+	}
+	if len(d.Spec.ImagePullSecrets) > 0 {
+		// The line names the registry credentials the pods
+		// pull with — the first thing to check on an
+		// ImagePullBackOff.
+		fmt.Fprintf(opts.stdout, "imagePullSecrets: %s\n", api.DescribeImagePullSecrets(d.Spec.ImagePullSecrets))
 	}
 	// Traffic lines appear only once traffic has been observed:
 	// a deployment with no observations shows nothing here, and

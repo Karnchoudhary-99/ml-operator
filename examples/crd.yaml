@@ -272,6 +272,12 @@ spec:
                     downloaderImage:
                       type: string
                       description: Init-container image that fetches the artifact. Empty means the default ("curlimages/curl:8.5.0").
+                imagePullSecrets:
+                  type: array
+                  description: Kubernetes secrets holding registry credentials for pulling the serving image (e.g. a docker-registry secret for a private registry). Empty means the pods pull without credentials. Each name must be a DNS-1123 subdomain — enforced by the operator, not the schema.
+                  items:
+                    type: string
+                    description: One secret name, e.g. "regcred".
                 env:
                   type: object
                   description: Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.

@@ -308,6 +308,21 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.ModelSource != nil && *a.ModelSource != *b.ModelSource {
 		return false
 	}
+	// Pull secrets are a spec change for the same reason:
+	// rotating the registry credentials must bump the
+	// generation, or `mlop apply` of a re-secreted manifest
+	// would call it unchanged and the reconciler would keep
+	// pulling with the old secret. Order is the spec's order
+	// (the rendered list keeps it), so the comparison is
+	// order-sensitive.
+	if len(a.ImagePullSecrets) != len(b.ImagePullSecrets) {
+		return false
+	}
+	for i := range a.ImagePullSecrets {
+		if a.ImagePullSecrets[i] != b.ImagePullSecrets[i] {
+			return false
+		}
+	}
 	if len(a.Env) != len(b.Env) {
 		return false
 	}

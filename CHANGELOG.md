@@ -24,6 +24,17 @@ the first public version is cut.
   status` shows the source and its verification state, `mlop
   diff` names a source change, and `examples/model-source-tour.sh`
   walks the whole story end to end.
+- Image pull secrets — `spec.imagePullSecrets`: the Kubernetes
+  secrets holding registry credentials for pulling the serving
+  image. The YAML dialect writes a comma-separated string
+  (`regcred, ghcr-creds`) and JSON carries a real array; empty
+  means the pods pull without credentials. The secrets render
+  onto the pod template of the stable, canary and green
+  Deployments alike, `mlop status` shows them, `mlop diff` names
+  a rotation, and the state round trip preserves them in both
+  the registry spec and the rendered Deployment, so an operator
+  restart never drops the credentials. `examples/image-pull-secrets-tour.sh`
+  walks the whole story end to end.
 - Traffic simulation — `mlop traffic <name> [--canary | --green]
   --requests N [--errors E] [--p95-ms M]`, feeding serving-traffic
   observations into the cluster metrics so the canary and
