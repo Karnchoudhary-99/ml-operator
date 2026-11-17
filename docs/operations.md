@@ -443,6 +443,31 @@ an operator restart never drops the credentials off the pod
 template. `examples/image-pull-secrets-tour.sh` drives all of
 it end to end.
 
+## Custom labels and annotations
+
+`spec.labels` and `spec.annotations` stamp team metadata onto
+every object the operator renders for a model — the Deployments
+(object and pod template), the Service, the HPA and the PDB.
+Labels are for selection, cost reports and dashboards
+(`team: search`, `cost-center: ml-platform`); annotations are
+free-form metadata for humans and tooling (`owner: team-search`,
+`runbook: https://…`), never selected on. Both are properties of
+the model, not of one revision: canary and green Deployments
+inherit them, so a rollout never silently drops the team's
+metadata. They never touch the operator's selectors — the Service
+and the Deployments keep selecting on the fixed base labels — so
+a label change re-renders the objects but can never orphan pods
+or steal traffic. Keys must be valid Kubernetes qualified names,
+label values at most 63 characters, and keys under
+`app.kubernetes.io/` and `ml-operator/` are rejected at apply
+time: the operator stamps those itself, and a collision would
+silently overwrite the selector labels. `mlop status` shows both
+lines (sorted `k=v`, and `--json` carries the maps), `mlop diff`
+names a change before it applies, and the state round trip
+preserves them in both the registry spec and the rendered
+Deployment, so an operator restart never drops the metadata.
+`examples/labels-tour.sh` drives all of it end to end.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a

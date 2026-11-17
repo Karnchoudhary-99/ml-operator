@@ -165,6 +165,19 @@ cluster every time, and applies only the difference:
    report a secret change instead of calling the Deployment
    in sync. The list is copied, so a later spec mutation
    cannot move an already-rendered Deployment.
+
+   Custom labels and annotations ride on the same render:
+   `spec.labels` merges over the operator's base labels on
+   every object (Deployment object and pod template, Service,
+   HPA, PDB) and `spec.annotations` lands beside them, both
+   inherited by canary and green Deployments. The selectors
+   are deliberately not part of the merge — they are built
+   from the fixed base labels alone, so a label change can
+   never move a selector — and the diff reasons name a label
+   or annotation change, so drift and `mlop diff` report a
+   metadata change instead of calling the objects in sync.
+   Both maps are copied, so a later spec mutation cannot
+   relabel an already-rendered object.
 4½. **Maintenance window.** After the plan and before any
    cluster write, the gate checks `spec.maintenanceWindow`:
    when the window is closed and the reconcile would change

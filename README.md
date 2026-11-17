@@ -46,6 +46,7 @@ with the desired state.
 - [x] Traffic simulation (`mlop traffic`: error-rate + p95-latency observations feed the canary/blue-green health gate, cumulative across batches — `internal/controller/fake.go`, `cmd/mlop/traffic.go`)
 - [x] Model source (`spec.modelSource`: the pod downloads the model artifact from an http(s) URI into a shared volume at startup, checksum-verified when a sha256 is set — `internal/api/model_source_test.go`, `internal/render/model_source_test.go`)
 - [x] Image pull secrets (`spec.imagePullSecrets`: the Kubernetes secrets holding registry credentials for pulling the serving image — `internal/api/image_pull_secrets_test.go`, `internal/render/image_pull_secrets_test.go`)
+- [x] Custom labels and annotations (`spec.labels` / `spec.annotations`: team metadata stamped onto every rendered object, never touching the operator's selectors — `internal/api/metadata_test.go`, `internal/render/metadata_test.go`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -729,6 +730,37 @@ credentials. `mlop status <name>` shows them (`imagePullSecrets:
 regcred, ghcr-creds`), and `mlop diff` names a rotation before it
 applies. `examples/image-pull-secrets-tour.sh` walks the whole
 story end to end.
+
+### Custom labels and annotations
+
+`spec.labels` and `spec.annotations` stamp team metadata onto
+every object the operator renders for a model — the Deployments
+(object and pod template), the Service, the HPA and the PDB:
+
+```yaml
+spec:
+  labels:
+    team: search
+    cost-center: ml-platform
+  annotations:
+    owner: team-search
+    runbook: https://example.com/runbooks/iris-mlp
+```
+
+Labels are for selection, cost reports and dashboards; annotations
+are free-form metadata for humans and tooling, never selected on.
+Both are properties of the model, not of one revision: canary and
+green Deployments inherit them, so a rollout never silently drops
+the team's metadata. They never touch the operator's selectors —
+the Service and the Deployments keep selecting on the fixed base
+labels, so a label change re-renders the objects but can never
+orphan pods or steal traffic. Keys must be valid Kubernetes
+qualified names, label values at most 63 characters, and keys
+under `app.kubernetes.io/` and `ml-operator/` are rejected (the
+operator stamps those itself). `mlop status <name>` shows them
+(`labels: cost-center=ml-platform, team=search`), and `mlop diff`
+names a change before it applies. `examples/labels-tour.sh`
+walks the whole story end to end.
 
 ### Autoscaling
 
