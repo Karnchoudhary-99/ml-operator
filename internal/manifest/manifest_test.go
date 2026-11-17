@@ -523,3 +523,32 @@ func TestParseImagePullSecrets(t *testing.T) {
 		t.Fatal("non-string/list value should be a parse error")
 	}
 }
+
+func TestParseMetadata(t *testing.T) {
+	d, err := Parse([]byte("name: x\nspec:\n  labels:\n    team: search\n    cost-center: ml-platform\n  annotations:\n    owner: team-search\n    runbook: https://example.com/runbooks/iris-mlp\n"))
+	if err != nil {
+		t.Fatalf("parse YAML metadata: %v", err)
+	}
+	if got := d.Spec.Labels; len(got) != 2 || got["team"] != "search" || got["cost-center"] != "ml-platform" {
+		t.Fatalf("YAML labels = %v", got)
+	}
+	if got := d.Spec.Annotations; len(got) != 2 || got["owner"] != "team-search" || got["runbook"] != "https://example.com/runbooks/iris-mlp" {
+		t.Fatalf("YAML annotations = %v", got)
+	}
+	d, err = Parse([]byte(`{"name":"x","spec":{"labels":{"team":"search"},"annotations":{"owner":"team-search"}}}`))
+	if err != nil {
+		t.Fatalf("parse JSON metadata: %v", err)
+	}
+	if got := d.Spec.Labels; len(got) != 1 || got["team"] != "search" {
+		t.Fatalf("JSON labels = %v", got)
+	}
+	if got := d.Spec.Annotations; len(got) != 1 || got["owner"] != "team-search" {
+		t.Fatalf("JSON annotations = %v", got)
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  labels: team\n")); err == nil {
+		t.Fatal("scalar labels should be a parse error")
+	}
+	if _, err := Parse([]byte(`{"name":"x","spec":{"annotations":{"owner":42}}}`)); err == nil {
+		t.Fatal("non-string annotation value should be a parse error")
+	}
+}
