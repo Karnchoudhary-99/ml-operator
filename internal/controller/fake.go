@@ -226,6 +226,47 @@ func (f *FakeCluster) SetMetrics(key string, m ClusterMetrics) {
 	}
 }
 
+// SetTraffic records one serving-traffic observation for the
+// Deployment at key — requests served and how many of them failed,
+// plus the p95 latency of the batch — the way a metrics server
+// would report it. Observations accumulate: the counters grow and
+// ErrorRate is always the cumulative Errors/Requests, so a second
+// batch refines the rate instead of replacing it. The p95 is the
+// latest observation (a batch that reports none leaves the
+// previous value alone), and CPU, request rate and the model-load
+// probe state are preserved. It is a no-op for a Deployment the
+// fake has never seen, and for a batch with no requests.
+func (f *FakeCluster) SetTraffic(key string, requests, errors int64, p95Ms float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.deployments[key]; !ok {
+		return
+	}
+	if requests <= 0 {
+		return
+	}
+	if errors < 0 {
+		errors = 0
+	}
+	if errors > requests {
+		errors = requests
+	}
+	m, ok := f.metrics[key]
+	if !ok {
+		// No load observation yet: keep error rate unknown (-1)
+		// instead of the zero value, which would read as "0 errors
+		// observed".
+		m = ClusterMetrics{ErrorRate: -1}
+	}
+	m.Requests += requests
+	m.Errors += errors
+	m.ErrorRate = float64(m.Errors) / float64(m.Requests)
+	if p95Ms > 0 {
+		m.LatencyP95Ms = p95Ms
+	}
+	f.metrics[key] = m
+}
+
 // setModelLoad records one model-load probe outcome for the
 // Deployment at key, keeping any load/health observation already
 // recorded for it. It is a no-op for a Deployment the fake has

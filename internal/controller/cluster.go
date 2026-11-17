@@ -22,6 +22,15 @@ type ClusterMetrics struct {
 	// LatencyP95Ms is the p95 request latency in milliseconds. 0
 	// means unknown.
 	LatencyP95Ms float64
+	// Requests is the cumulative request count behind ErrorRate
+	// (every observation fed through SetTraffic adds to it). 0
+	// means no traffic has been observed yet.
+	Requests int64
+	// Errors is the cumulative failed-request count behind
+	// ErrorRate. ErrorRate is always Errors/Requests once any
+	// traffic has been observed, so the two counters and the rate
+	// can never disagree.
+	Errors int64
 	// ModelLoadKnown is true when the model-load probe reported.
 	ModelLoadKnown bool
 	// ModelLoaded is true when the model finished loading into the
