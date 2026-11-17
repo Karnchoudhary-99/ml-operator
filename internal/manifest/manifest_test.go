@@ -440,3 +440,48 @@ func TestParseMaintenanceWindow(t *testing.T) {
 		t.Fatal("non-mapping maintenanceWindow should be a parse error")
 	}
 }
+
+// TestParseModelSource pins the modelSource block in both
+// dialects: the YAML mapping and the JSON object. All four
+// fields parse, an unknown key is a parse error (so a typo
+// like "url" for "uri" fails loudly), and a non-mapping value
+// is a parse error.
+func TestParseModelSource(t *testing.T) {
+	sha := "9f2c4a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807"
+	d, err := Parse([]byte("name: x\nspec:\n  modelSource:\n    uri: https://artifacts.example.com/models/iris-mlp.onnx\n    sha256: " + sha + "\n    mountPath: /data/models\n    downloaderImage: curlimages/curl:8.9.0\n"))
+	if err != nil {
+		t.Fatalf("parse YAML modelSource: %v", err)
+	}
+	m := d.Spec.ModelSource
+	if m == nil || m.URI != "https://artifacts.example.com/models/iris-mlp.onnx" || m.SHA256 != sha ||
+		m.MountPath != "/data/models" || m.DownloaderImage != "curlimages/curl:8.9.0" {
+		t.Fatalf("YAML modelSource = %+v", m)
+	}
+	d, err = Parse([]byte(`{"name":"x","spec":{"modelSource":{"uri":"https://artifacts.example.com/models/iris-mlp.onnx","sha256":"` + sha + `"}}}`))
+	if err != nil {
+		t.Fatalf("parse JSON modelSource: %v", err)
+	}
+	m = d.Spec.ModelSource
+	if m == nil || m.URI != "https://artifacts.example.com/models/iris-mlp.onnx" || m.SHA256 != sha ||
+		m.MountPath != "" || m.DownloaderImage != "" {
+		t.Fatalf("JSON modelSource = %+v", m)
+	}
+	// A URI-only block parses: checksum, mount path and image
+	// all take their defaults downstream.
+	d, err = Parse([]byte("name: x\nspec:\n  modelSource:\n    uri: https://artifacts.example.com/models/iris-mlp.onnx\n"))
+	if err != nil {
+		t.Fatalf("parse URI-only modelSource: %v", err)
+	}
+	if m := d.Spec.ModelSource; m == nil || m.URI == "" || m.SHA256 != "" {
+		t.Fatalf("URI-only modelSource = %+v", m)
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  modelSource:\n    url: https://artifacts.example.com/models/iris-mlp.onnx\n")); err == nil {
+		t.Fatal("unknown modelSource key should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  modelSource: https://artifacts.example.com/models/iris-mlp.onnx\n")); err == nil {
+		t.Fatal("non-mapping modelSource should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  modelSource:\n    uri: 42\n")); err == nil {
+		t.Fatal("non-string uri should be a parse error")
+	}
+}
