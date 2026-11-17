@@ -83,7 +83,7 @@ func mapDeployment(tree map[string]any, d *api.ModelDeployment) error {
 func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
-		"canary", "blueGreen", "autoscaling", "availability", "security", "placement", "modelSource", "imagePullSecrets", "env", "health",
+		"canary", "blueGreen", "autoscaling", "availability", "security", "placement", "modelSource", "imagePullSecrets", "labels", "annotations", "env", "health",
 		"paused", "maintenanceWindow",
 	}, "spec"); err != nil {
 		return err
@@ -473,6 +473,25 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 		s.ImagePullSecrets = secrets
 	}
 
+	// labels and annotations are string maps, written the same
+	// way in YAML and JSON — a mapping of string to string.
+	// Keys and values are validated by api.Validate on apply;
+	// the parser only enforces the shape.
+	if raw, ok := spec["labels"]; ok {
+		m, err := stringMapField(raw, "spec.labels")
+		if err != nil {
+			return err
+		}
+		s.Labels = m
+	}
+	if raw, ok := spec["annotations"]; ok {
+		m, err := stringMapField(raw, "spec.annotations")
+		if err != nil {
+			return err
+		}
+		s.Annotations = m
+	}
+
 	if raw, ok := spec["env"]; ok {
 		e, ok := raw.(map[string]any)
 		if !ok {
@@ -553,6 +572,26 @@ func parseGate(raw any, path string) (*api.GateSpec, error) {
 		gs.MinReadyRatio = f
 	}
 	return gs, nil
+}
+
+// stringMapField reads a mapping of string to string: ok is false
+// when the key is absent. A non-string value is a parse error —
+// the YAML and JSON dialects both write metadata as a mapping,
+// never as a list or a scalar.
+func stringMapField(raw any, path string) (map[string]string, error) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: must be a mapping", path)
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		sv, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s.%s: must be a string", path, k)
+		}
+		out[k] = sv
+	}
+	return out, nil
 }
 
 // strField reads a string field: ok is false when the key is absent.

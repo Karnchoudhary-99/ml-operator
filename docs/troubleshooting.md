@@ -74,6 +74,13 @@ usual ones:
   kubelet, not at apply time — `mlop status` shows the secrets
   (or their absence) so an `ImagePullBackOff` has somewhere to
   look first.
+- **labels/annotations mistakes** — a key that is not a valid
+  Kubernetes qualified name, a label value over 63 characters,
+  or a key under `app.kubernetes.io/` or `ml-operator/` (the
+  operator owns those labels; the error names the reserved
+  prefix). A model missing from a dashboard or a cost report
+  usually has no labels at all — `mlop status` shows them (or
+  their absence) so that is the first place to look.
 
 ## `apply` fails and the deployment goes `Degraded` with `ApplyFailed`
 

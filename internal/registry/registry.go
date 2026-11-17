@@ -323,6 +323,18 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 			return false
 		}
 	}
+	// Labels and annotations are a spec change for the same
+	// reason: re-labelling a model must bump the generation,
+	// or `mlop apply` of a re-labelled manifest would call it
+	// unchanged and the reconciler would keep serving the old
+	// metadata. Maps compare by content (nil == empty), so a
+	// manifest that drops the block equals one that never had it.
+	if !stringMapEqual(a.Labels, b.Labels) {
+		return false
+	}
+	if !stringMapEqual(a.Annotations, b.Annotations) {
+		return false
+	}
 	if len(a.Env) != len(b.Env) {
 		return false
 	}
@@ -457,6 +469,22 @@ func availabilityEqual(a, b api.AvailabilitySpec) bool {
 // file) must still equal a freshly parsed manifest with the same
 // placement, or `mlop diff -f` would bump the generation on
 // every identical re-apply.
+// stringMapEqual compares two string maps by content. Nil and
+// empty are equal: a manifest that drops a metadata block is the
+// same spec as one that never had it, so neither bumps the
+// generation on its own.
+func stringMapEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
 func placementEqual(a, b api.PlacementSpec) bool {
 	if len(a.NodeSelector) != len(b.NodeSelector) {
 		return false

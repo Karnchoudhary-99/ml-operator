@@ -6,6 +6,7 @@
     "ml-operator/managed-by": "ml-operator",
     "ml-operator/model": "iris-mlp"
   },
+  "Annotations": null,
   "MinReplicas": 1,
   "MaxReplicas": 4,
   "TargetCPUUtilization": 70,

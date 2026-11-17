@@ -311,3 +311,60 @@ func TestRoundTripImagePullSecrets(t *testing.T) {
 		t.Fatalf("reconcile after restore applied %v, want a single NoOp", res.Actions)
 	}
 }
+
+// TestRoundTripMetadata pins that labels and annotations survive
+// a state round trip in both places that carry them: the
+// registry's spec (so a later apply compares against the real
+// metadata) and the restored cluster's rendered Deployment (so a
+// restart never drops the team's labels off the pod template).
+func TestRoundTripMetadata(t *testing.T) {
+	d := dep()
+	d.Spec.Labels = map[string]string{"team": "search", "cost-center": "ml-platform"}
+	d.Spec.Annotations = map[string]string{"owner": "team-search"}
+	reg := registry.New()
+	reg.Register(d)
+	cluster := controller.NewFakeCluster()
+	rec := controller.New(reg, cluster)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := Save(path, From(reg, cluster, rec)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rt := loaded.Restore()
+	entry := rt.Registry.Get("default/iris-mlp")
+	if entry == nil {
+		t.Fatalf("restored registry lost the deployment")
+	}
+	if got := entry.Deployment.Spec.Labels; len(got) != 2 || got["team"] != "search" {
+		t.Fatalf("restored spec Labels = %v", got)
+	}
+	if got := entry.Deployment.Spec.Annotations; len(got) != 1 || got["owner"] != "team-search" {
+		t.Fatalf("restored spec Annotations = %v", got)
+	}
+	live, ok := rt.Cluster.GetDeployment("default/iris-mlp")
+	if !ok {
+		t.Fatalf("restored cluster lost the Deployment")
+	}
+	if got := live.Labels; got["team"] != "search" || got["cost-center"] != "ml-platform" {
+		t.Fatalf("restored cluster Deployment Labels = %v", got)
+	}
+	if got := live.Annotations; got["owner"] != "team-search" {
+		t.Fatalf("restored cluster Deployment Annotations = %v", got)
+	}
+	// The restored runtime reconciles in sync: the metadata
+	// matches, so nothing re-applies.
+	res, err := rt.Reconciler.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile after restore: %v", err)
+	}
+	if len(res.Actions) != 1 || res.Actions[0].Kind != controller.ActionNoOp {
+		t.Fatalf("actions after restore = %v, want a single NoOp", res.Actions)
+	}
+}

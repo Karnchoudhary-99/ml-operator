@@ -6,6 +6,7 @@
     "ml-operator/managed-by": "ml-operator",
     "ml-operator/model": "iris-mlp"
   },
+  "Annotations": null,
   "Selector": {
     "app.kubernetes.io/name": "iris-mlp",
     "ml-operator/green": "false",

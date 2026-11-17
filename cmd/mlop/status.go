@@ -68,6 +68,8 @@ type statusDetailView struct {
 	Placement          *api.PlacementSpec         `json:"placement,omitempty"`
 	ModelSource        *api.ModelSourceSpec       `json:"modelSource,omitempty"`
 	ImagePullSecrets   []string                   `json:"imagePullSecrets,omitempty"`
+	Labels             map[string]string          `json:"labels,omitempty"`
+	Annotations        map[string]string          `json:"annotations,omitempty"`
 	Traffic            *trafficView               `json:"traffic,omitempty"`
 	CanaryTraffic      *trafficView               `json:"canaryTraffic,omitempty"`
 	GreenTraffic       *trafficView               `json:"greenTraffic,omitempty"`
@@ -195,6 +197,8 @@ func cmdStatus(opts *options, args []string) int {
 			Availability: d.Spec.Availability, Security: d.Spec.Security,
 			Placement: d.Spec.Placement, ModelSource: d.Spec.ModelSource,
 			ImagePullSecrets: d.Spec.ImagePullSecrets,
+			Labels:           d.Spec.Labels,
+			Annotations:      d.Spec.Annotations,
 			Traffic:          traffic, CanaryTraffic: canaryTraffic, GreenTraffic: greenTraffic,
 			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
@@ -275,6 +279,15 @@ func cmdStatus(opts *options, args []string) int {
 		// pull with — the first thing to check on an
 		// ImagePullBackOff.
 		fmt.Fprintf(opts.stdout, "imagePullSecrets: %s\n", api.DescribeImagePullSecrets(d.Spec.ImagePullSecrets))
+	}
+	if len(d.Spec.Labels) > 0 {
+		// The line names the team's labels on every rendered
+		// object — the first thing to check when a model is
+		// missing from a dashboard or a cost report.
+		fmt.Fprintf(opts.stdout, "labels:       %s\n", api.DescribeMetadata(d.Spec.Labels))
+	}
+	if len(d.Spec.Annotations) > 0 {
+		fmt.Fprintf(opts.stdout, "annotations:  %s\n", api.DescribeMetadata(d.Spec.Annotations))
 	}
 	// Traffic lines appear only once traffic has been observed:
 	// a deployment with no observations shows nothing here, and

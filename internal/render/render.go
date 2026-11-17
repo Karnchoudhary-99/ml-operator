@@ -94,8 +94,13 @@ type Deployment struct {
 	// Labels are the pod-template labels; Selector is the Deployment
 	// selector and must stay stable across revisions (it never
 	// carries the version label, or an update would orphan pods).
-	Labels   map[string]string
-	Selector map[string]string
+	Labels map[string]string
+	// Annotations are the pod-template annotations: the spec's
+	// custom annotations, copied like the labels so a caller
+	// mutating the spec afterwards cannot silently change a
+	// Deployment that was already rendered.
+	Annotations map[string]string
+	Selector    map[string]string
 	// Canary marks the extra small Deployment of a canary rollout;
 	// the stable Deployment always has Canary false.
 	Canary bool
@@ -150,12 +155,13 @@ type Deployment struct {
 
 // Service is the rendered ClusterIP Service fronting a model.
 type Service struct {
-	Name       string
-	Namespace  string
-	Labels     map[string]string
-	Selector   map[string]string
-	Port       int32 // the Service port clients connect to
-	TargetPort int32 // the container port (spec.Port)
+	Name        string
+	Namespace   string
+	Labels      map[string]string
+	Annotations map[string]string
+	Selector    map[string]string
+	Port        int32 // the Service port clients connect to
+	TargetPort  int32 // the container port (spec.Port)
 }
 
 // HPA is the rendered HorizontalPodAutoscaler for a model: it scales
@@ -168,6 +174,9 @@ type HPA struct {
 	Name      string
 	Namespace string
 	Labels    map[string]string
+	// Annotations are the spec's custom annotations, copied
+	// like the labels.
+	Annotations map[string]string
 	// MinReplicas / MaxReplicas are the scaling bounds from the spec.
 	MinReplicas int32
 	MaxReplicas int32
@@ -191,6 +200,7 @@ type PodDisruptionBudget struct {
 	Name         string
 	Namespace    string
 	Labels       map[string]string
+	Annotations  map[string]string
 	Selector     map[string]string
 	MinAvailable int32
 }
@@ -209,12 +219,33 @@ type TopologySpreadConstraint struct {
 
 // Labels returns the labels identifying a model's objects. The
 // version label lives on pod templates only, never on selectors.
+// The spec's custom labels merge in on top of the operator's own
+// base labels — validation rejects the operator's prefixes, so a
+// custom label can never overwrite one — and the map is copied,
+// so a caller mutating the spec afterwards cannot silently
+// relabel an object that was already rendered.
 func Labels(d api.ModelDeployment) map[string]string {
-	return map[string]string{
+	labels := map[string]string{
 		"app.kubernetes.io/name": d.Name,
 		"ml-operator/model":      d.Name,
 		"ml-operator/managed-by": ManagedBy,
 	}
+	for k, v := range d.Spec.Labels {
+		labels[k] = v
+	}
+	return labels
+}
+
+// Annotations returns the spec's custom annotations for a model's
+// objects, copied like Labels. An empty spec annotates nothing:
+// a nil map renders as nil, not an empty map, so diffs stay
+// clean between a manifest with no annotations and one with
+// an empty annotations block.
+func Annotations(d api.ModelDeployment) map[string]string {
+	if len(d.Spec.Annotations) == 0 {
+		return nil
+	}
+	return copyStringMap(d.Spec.Annotations)
 }
 
 // Selector returns the stable selector labels for a model's objects.
@@ -248,13 +279,14 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 	// green=false) never routes to green pods until the cutover.
 	labels["ml-operator/green"] = "false"
 	dep := Deployment{
-		Name:      d.Name,
-		Namespace: d.Namespace,
-		Replicas:  replicas,
-		Labels:    labels,
-		Selector:  deploymentSelector(d, "false", "false"),
-		Canary:    false,
-		Container: containerFor(d),
+		Name:        d.Name,
+		Namespace:   d.Namespace,
+		Replicas:    replicas,
+		Labels:      labels,
+		Annotations: Annotations(d),
+		Selector:    deploymentSelector(d, "false", "false"),
+		Canary:      false,
+		Container:   containerFor(d),
 		// Security resolves through the Effective* helpers, so a
 		// spec that was never defaulted still renders the
 		// hardened set rather than a zero value (root uid 0,
@@ -383,12 +415,13 @@ func deploymentSelector(d api.ModelDeployment, canary, green string) map[string]
 // the cutover flips the Service to GreenServiceFor.
 func ServiceFor(d api.ModelDeployment) Service {
 	return Service{
-		Name:       d.Name,
-		Namespace:  d.Namespace,
-		Labels:     Labels(d),
-		Selector:   serviceSelector(d, "false"),
-		Port:       80,
-		TargetPort: d.Spec.Port,
+		Name:        d.Name,
+		Namespace:   d.Namespace,
+		Labels:      Labels(d),
+		Annotations: Annotations(d),
+		Selector:    serviceSelector(d, "false"),
+		Port:        80,
+		TargetPort:  d.Spec.Port,
 	}
 }
 
@@ -426,6 +459,7 @@ func HPAFor(d api.ModelDeployment) (HPA, bool) {
 		Name:                    d.Name,
 		Namespace:               d.Namespace,
 		Labels:                  Labels(d),
+		Annotations:             Annotations(d),
 		MinReplicas:             a.MinReplicas,
 		MaxReplicas:             a.MaxReplicas,
 		TargetCPUUtilization:    a.TargetCPUUtilization,
@@ -451,6 +485,7 @@ func PDBFor(d api.ModelDeployment) (PodDisruptionBudget, bool) {
 		Name:         d.Name,
 		Namespace:    d.Namespace,
 		Labels:       Labels(d),
+		Annotations:  Annotations(d),
 		Selector:     Selector(d),
 		MinAvailable: min,
 	}, true
@@ -466,6 +501,12 @@ func PDBDiffReasons(desired, live PodDisruptionBudget) []string {
 	}
 	if !labelsEqual(desired.Selector, live.Selector) {
 		reasons = append(reasons, "selector changed")
+	}
+	if !labelsEqual(desired.Labels, live.Labels) {
+		reasons = append(reasons, "labels changed")
+	}
+	if !labelsEqual(desired.Annotations, live.Annotations) {
+		reasons = append(reasons, "annotations changed")
 	}
 	return reasons
 }
@@ -486,6 +527,12 @@ func HPADiffReasons(desired, live HPA) []string {
 	}
 	if desired.TargetRequestsPerSecond != live.TargetRequestsPerSecond {
 		reasons = append(reasons, fmt.Sprintf("targetRequestsPerSecond %d -> %d", live.TargetRequestsPerSecond, desired.TargetRequestsPerSecond))
+	}
+	if !labelsEqual(desired.Labels, live.Labels) {
+		reasons = append(reasons, "labels changed")
+	}
+	if !labelsEqual(desired.Annotations, live.Annotations) {
+		reasons = append(reasons, "annotations changed")
 	}
 	return reasons
 }
@@ -576,6 +623,20 @@ func DeploymentDiffReasons(desired, live Deployment) []string {
 	if !stringSliceEqual(desired.ImagePullSecrets, live.ImagePullSecrets) {
 		reasons = append(reasons, "imagePullSecrets changed")
 	}
+	// Custom labels and annotations are rendered onto every
+	// Deployment too — the pod template carries them, so a
+	// label or annotation change is a Deployment change: the
+	// reconciler re-applies and `mlop diff` names it, instead
+	// of the drift check silently reporting the Deployment in
+	// sync. The selector is deliberately not compared here:
+	// it is fixed base labels, and a custom label can never
+	// change it.
+	if !labelsEqual(desired.Labels, live.Labels) {
+		reasons = append(reasons, "labels changed")
+	}
+	if !labelsEqual(desired.Annotations, live.Annotations) {
+		reasons = append(reasons, "annotations changed")
+	}
 	return reasons
 }
 
@@ -591,6 +652,12 @@ func ServiceDiffReasons(desired, live Service) []string {
 	}
 	if !labelsEqual(desired.Selector, live.Selector) {
 		reasons = append(reasons, "selector changed")
+	}
+	if !labelsEqual(desired.Labels, live.Labels) {
+		reasons = append(reasons, "labels changed")
+	}
+	if !labelsEqual(desired.Annotations, live.Annotations) {
+		reasons = append(reasons, "annotations changed")
 	}
 	return reasons
 }

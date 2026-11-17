@@ -43,6 +43,7 @@ func Validate(d *ModelDeployment) []error {
 	errs = append(errs, validatePlacement(spec)...)
 	errs = append(errs, validateModelSource(spec)...)
 	errs = append(errs, validateImagePullSecrets(spec)...)
+	errs = append(errs, validateMetadata(spec)...)
 	errs = append(errs, validateEnv(spec.Env)...)
 	errs = append(errs, validateHealth(spec.Health)...)
 
@@ -358,6 +359,49 @@ func validateImagePullSecrets(spec ModelDeploymentSpec) []error {
 			errs = append(errs, fmt.Errorf("%s duplicates secret %q", path, name))
 		}
 		seen[name] = true
+	}
+	return errs
+}
+
+// validateMetadata checks the custom labels and annotations.
+// Both maps share the key rules: a valid Kubernetes qualified
+// name (optional DNS prefix + '/' + name). Label values follow
+// the 63-character label rule; annotation values are free-form
+// (a runbook URL, a long owner note), so any string is valid.
+// Keys under the operator's own prefixes are rejected: the
+// operator stamps app.kubernetes.io/name and ml-operator/*
+// itself, and a user label colliding with one would silently
+// overwrite the selector labels the Service and Deployments
+// rely on. An empty map is valid — no custom metadata is a
+// real choice, not an omission.
+func validateMetadata(spec ModelDeploymentSpec) []error {
+	var errs []error
+	reserved := func(key string) string {
+		for _, prefix := range []string{"app.kubernetes.io/", "ml-operator/"} {
+			if strings.HasPrefix(key, prefix) {
+				return prefix
+			}
+		}
+		return ""
+	}
+	for k, v := range spec.Labels {
+		path := fmt.Sprintf("spec.labels[%q]", k)
+		if !isLabelKey(k) {
+			errs = append(errs, fmt.Errorf("%s key %q is not a valid label key (optional DNS prefix + '/' + name of letters, digits, '-', '_', '.')", path, k))
+		} else if prefix := reserved(k); prefix != "" {
+			errs = append(errs, fmt.Errorf("%s key %q uses the reserved prefix %q (the operator owns those labels)", path, k, prefix))
+		}
+		if !isLabelValue(v) {
+			errs = append(errs, fmt.Errorf("%s value %q is not a valid label value (at most 63 characters of letters, digits, '-', '_', '.')", path, v))
+		}
+	}
+	for k := range spec.Annotations {
+		path := fmt.Sprintf("spec.annotations[%q]", k)
+		if !isLabelKey(k) {
+			errs = append(errs, fmt.Errorf("%s key %q is not a valid annotation key (optional DNS prefix + '/' + name of letters, digits, '-', '_', '.')", path, k))
+		} else if prefix := reserved(k); prefix != "" {
+			errs = append(errs, fmt.Errorf("%s key %q uses the reserved prefix %q (the operator owns those annotations)", path, k, prefix))
+		}
 	}
 	return errs
 }

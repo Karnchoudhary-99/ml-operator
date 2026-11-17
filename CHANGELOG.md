@@ -8,6 +8,22 @@ the first public version is cut.
 
 ### Added
 
+- Custom labels and annotations — `spec.labels` /
+  `spec.annotations`: team metadata stamped onto every object
+  the operator renders for a model (Deployments incl. pod
+  template, Service, HPA, PDB), inherited by canary and green
+  Deployments. Labels are for selection, cost reports and
+  dashboards; annotations are free-form metadata (owner, runbook
+  URL), never selected on. Neither touches the operator's
+  selectors, so a metadata edit re-renders objects but can never
+  orphan pods or steal traffic. Keys must be valid Kubernetes
+  qualified names, label values at most 63 characters, and keys
+  under `app.kubernetes.io/` and `ml-operator/` are rejected at
+  apply time. `mlop status` shows both lines (and `--json`
+  carries them), `mlop diff` names a change, and the state round
+  trip preserves them, so an operator restart never drops the
+  metadata. `examples/labels-tour.sh` walks the whole story end
+  to end.
 - Model source — `spec.modelSource` (uri, optional sha256,
   mountPath, downloaderImage): the pod downloads the model
   artifact from an http(s) URI into a shared emptyDir volume at

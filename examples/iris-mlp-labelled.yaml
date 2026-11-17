@@ -1,0 +1,34 @@
+# Minimal ModelDeployment manifest with custom labels and
+# annotations: the team and cost-center labels land on every
+# object the operator renders (Deployments incl. pod template,
+# Service, HPA, PDB) so the model shows up in the team's own
+# selectors and cost reports; the owner and runbook annotations
+# carry the human metadata. Labels never touch the operator's
+# selectors, so a label change re-renders the objects but can
+# never orphan pods or steal traffic. Deployments without
+# metadata omit both blocks entirely.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 2
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  labels:
+    team: search
+    cost-center: ml-platform
+  annotations:
+    owner: team-search
+    runbook: https://example.com/runbooks/iris-mlp
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
