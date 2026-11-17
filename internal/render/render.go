@@ -569,6 +569,13 @@ func DeploymentDiffReasons(desired, live Deployment) []string {
 	if !volumeMountsEqual(desired.Container.VolumeMounts, live.Container.VolumeMounts) {
 		reasons = append(reasons, "model artifact mount changed")
 	}
+	// Pull secrets are rendered onto every Deployment too:
+	// adding, removing or rotating one changes the pod
+	// template, so the reconciler must re-apply and `mlop
+	// diff` must name it.
+	if !stringSliceEqual(desired.ImagePullSecrets, live.ImagePullSecrets) {
+		reasons = append(reasons, "imagePullSecrets changed")
+	}
 	return reasons
 }
 

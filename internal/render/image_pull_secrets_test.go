@@ -36,3 +36,41 @@ func TestRenderNoImagePullSecrets(t *testing.T) {
 		t.Fatalf("unsourced ImagePullSecrets = %v, want nil", got.ImagePullSecrets)
 	}
 }
+
+// TestDeploymentDiffReasonsImagePullSecrets pins that a
+// pull-secret change is a Deployment change: adding a secret
+// names it, rotating one names it, and an identical list is
+// in sync. Order matters here — the rendered list keeps the
+// spec's order — so a re-ordered list is a change too.
+func TestDeploymentDiffReasonsImagePullSecrets(t *testing.T) {
+	with := func(secrets []string) Deployment {
+		d := dep()
+		d.Spec.ImagePullSecrets = secrets
+		return DeploymentFor(d)
+	}
+	plain := with(nil)
+	secreted := with([]string{"regcred"})
+	reasons := DeploymentDiffReasons(secreted, plain)
+	found := false
+	for _, r := range reasons {
+		if r == "imagePullSecrets changed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reasons %v, want the imagePullSecrets change", reasons)
+	}
+	if reasons := DeploymentDiffReasons(secreted, with([]string{"regcred"})); len(reasons) != 0 {
+		t.Fatalf("identical secrets diff: %v", reasons)
+	}
+	reasons = DeploymentDiffReasons(with([]string{"ghcr-creds"}), secreted)
+	found = false
+	for _, r := range reasons {
+		if r == "imagePullSecrets changed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reasons %v, want the imagePullSecrets change on rotation", reasons)
+	}
+}
