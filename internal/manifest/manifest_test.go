@@ -321,6 +321,86 @@ func TestParsePaused(t *testing.T) {
 	}
 }
 
+// TestParsePlacement pins the placement block: the YAML dialect
+// has no lists, so nodeSelector is a mapping and tolerations
+// arrive as a comma-separated string of compact entries; JSON
+// carries a real array of toleration objects. A partial block
+// parses (validation is ApplyDefaults + Validate's job, not the
+// parser's) — and a compact entry round-trips Toleration.String,
+// so `mlop status` output pastes back into a manifest.
+func TestParsePlacement(t *testing.T) {
+	d, err := Parse([]byte("name: x\nspec:\n  placement:\n    nodeSelector:\n      accelerator: nvidia-tesla-t4\n      zone: gpu-pool\n    tolerations: gpu=true:NoSchedule, dedicated:Exists:NoExecute:300\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	p := d.Spec.Placement
+	if p == nil || p.NodeSelector["accelerator"] != "nvidia-tesla-t4" || p.NodeSelector["zone"] != "gpu-pool" {
+		t.Fatalf("YAML nodeSelector = %v", p)
+	}
+	if len(p.Tolerations) != 2 {
+		t.Fatalf("YAML tolerations = %v, want 2", p.Tolerations)
+	}
+	first := p.Tolerations[0]
+	if first.Key != "gpu" || first.Operator != "Equal" || first.Value != "true" || first.Effect != "NoSchedule" {
+		t.Fatalf("YAML toleration 0 = %+v", first)
+	}
+	second := p.Tolerations[1]
+	if second.Key != "dedicated" || second.Operator != "Exists" || second.Value != "" ||
+		second.Effect != "NoExecute" || second.TolerationSeconds == nil || *second.TolerationSeconds != 300 {
+		t.Fatalf("YAML toleration 1 = %+v", second)
+	}
+	// Every parsed toleration re-renders to its compact entry.
+	if got := first.String(); got != "gpu=true:NoSchedule" {
+		t.Fatalf("toleration 0 String() = %q, want %q", got, "gpu=true:NoSchedule")
+	}
+	if got := second.String(); got != "dedicated:Exists:NoExecute:300" {
+		t.Fatalf("toleration 1 String() = %q, want %q", got, "dedicated:Exists:NoExecute:300")
+	}
+
+	d, err = Parse([]byte(`{"name":"x","spec":{"placement":{"nodeSelector":{"accelerator":"nvidia-tesla-t4"},"tolerations":[{"key":"gpu","operator":"Equal","value":"true","effect":"NoSchedule"},{"key":"dedicated","operator":"Exists","effect":"NoExecute","tolerationSeconds":300}]}}}`))
+	if err != nil {
+		t.Fatalf("Parse JSON: %v", err)
+	}
+	p = d.Spec.Placement
+	if p == nil || p.NodeSelector["accelerator"] != "nvidia-tesla-t4" || len(p.Tolerations) != 2 ||
+		p.Tolerations[0].Value != "true" || p.Tolerations[1].Operator != "Exists" ||
+		p.Tolerations[1].TolerationSeconds == nil || *p.Tolerations[1].TolerationSeconds != 300 {
+		t.Fatalf("JSON placement = %+v", p)
+	}
+
+	// A selector-only block parses: tolerations are optional.
+	d, err = Parse([]byte("name: x\nspec:\n  placement:\n    nodeSelector:\n      accelerator: nvidia-tesla-t4\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	p = d.Spec.Placement
+	if p == nil || len(p.NodeSelector) != 1 || len(p.Tolerations) != 0 {
+		t.Fatalf("selector-only placement = %+v", p)
+	}
+
+	if _, err := Parse([]byte("name: x\nspec:\n  placement:\n    nodeSelector:\n      accelerator: nvidia-tesla-t4\n    nodeAffinity: preferred\n")); err == nil {
+		t.Fatal("unknown placement key should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  placement: gpu-nodes\n")); err == nil {
+		t.Fatal("non-mapping placement should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  placement:\n    nodeSelector: accelerator\n")); err == nil {
+		t.Fatal("non-mapping nodeSelector should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  placement:\n    tolerations: gpu=true:NoSchedule:extra:parts:here\n")); err == nil {
+		t.Fatal("toleration with too many parts should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  placement:\n    tolerations: gpu=true:NoExecute:notanumber\n")); err == nil {
+		t.Fatal("toleration with non-numeric seconds should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  placement:\n    tolerations: gpu=true:NoSchedule,\n")); err == nil {
+		t.Fatal("toleration list with an empty entry should be a parse error")
+	}
+	if _, err := Parse([]byte(`{"name":"x","spec":{"placement":{"tolerations":[{"key":"gpu","typo":"true"}]}}}`)); err == nil {
+		t.Fatal("unknown toleration key should be a parse error")
+	}
+}
+
 // TestParseMaintenanceWindow pins the maintenanceWindow block: the
 // YAML dialect has no lists, so days arrive comma-separated; JSON
 // carries a real array. A partial block parses (validation is

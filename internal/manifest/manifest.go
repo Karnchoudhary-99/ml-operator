@@ -83,7 +83,7 @@ func mapDeployment(tree map[string]any, d *api.ModelDeployment) error {
 func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
-		"canary", "blueGreen", "autoscaling", "availability", "security", "env", "health",
+		"canary", "blueGreen", "autoscaling", "availability", "security", "placement", "env", "health",
 		"paused", "maintenanceWindow",
 	}, "spec"); err != nil {
 		return err
@@ -388,6 +388,40 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 		s.Security = ss
 	}
 
+	if raw, ok := spec["placement"]; ok {
+		a, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("spec.placement: must be a mapping")
+		}
+		if err := checkKeys(a, []string{"nodeSelector", "tolerations"}, "spec.placement"); err != nil {
+			return err
+		}
+		ps := &api.PlacementSpec{}
+		if v, ok := a["nodeSelector"]; ok {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return fmt.Errorf("spec.placement.nodeSelector: must be a mapping")
+			}
+			sel := make(map[string]string, len(m))
+			for k, val := range m {
+				sv, ok := val.(string)
+				if !ok {
+					return fmt.Errorf("spec.placement.nodeSelector.%s: must be a string", k)
+				}
+				sel[k] = sv
+			}
+			ps.NodeSelector = sel
+		}
+		if v, ok := a["tolerations"]; ok {
+			tols, err := tolerationsField(v, "spec.placement.tolerations")
+			if err != nil {
+				return err
+			}
+			ps.Tolerations = tols
+		}
+		s.Placement = ps
+	}
+
 	if raw, ok := spec["env"]; ok {
 		e, ok := raw.(map[string]any)
 		if !ok {
@@ -521,6 +555,134 @@ func boolField(raw any, path string) (bool, error) {
 	default:
 		return false, fmt.Errorf("%s: must be a boolean", path)
 	}
+}
+
+// tolerationsField parses the tolerations of a placement block.
+// JSON manifests carry a real array of objects; the YAML dialect
+// has no lists, so a YAML manifest writes a comma-separated string
+// of compact entries, one per toleration:
+//
+//	"gpu=true:NoSchedule, dedicated:Exists:NoExecute:300"
+//
+// Each entry is key[=value][:Exists][:effect][:seconds]: an "="
+// means operator Equal, a ":Exists" part means operator Exists
+// (and the value must be absent), the effect is NoSchedule,
+// PreferNoSchedule or NoExecute, and the seconds are only
+// meaningful with NoExecute — which also needs the effect in the
+// compact form ("key=value:300" cannot say which effect the
+// seconds belong to). It is the same compact form api.Toleration
+// renders with String(), so `mlop status` output pastes straight
+// back into a manifest.
+func tolerationsField(raw any, path string) ([]api.Toleration, error) {
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return []api.Toleration{}, nil
+		}
+		parts := strings.Split(v, ",")
+		out := make([]api.Toleration, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				return nil, fmt.Errorf("%s: empty entry in %q", path, v)
+			}
+			tol, err := parseCompactToleration(p, path)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, tol)
+		}
+		return out, nil
+	case []any:
+		out := make([]api.Toleration, 0, len(v))
+		for i, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d]: must be a mapping", path, i)
+			}
+			tol, err := tolerationFromMap(m, fmt.Sprintf("%s[%d]", path, i))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, tol)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s: must be a comma-separated string or a list of toleration objects", path)
+	}
+}
+
+// parseCompactToleration parses one compact toleration entry:
+// key[=value][:Exists][:effect][:seconds].
+func parseCompactToleration(entry, path string) (api.Toleration, error) {
+	var tol api.Toleration
+	parts := strings.Split(entry, ":")
+	if len(parts) > 4 {
+		return tol, fmt.Errorf("%s: toleration %q has too many ':'-separated parts (want key[=value][:Exists][:effect][:seconds])", path, entry)
+	}
+	keyVal := parts[0]
+	if i := strings.Index(keyVal, "="); i >= 0 {
+		tol.Key = keyVal[:i]
+		tol.Value = keyVal[i+1:]
+		tol.Operator = "Equal"
+	} else {
+		tol.Key = keyVal
+	}
+	idx := 1
+	if idx < len(parts) && parts[idx] == "Exists" {
+		tol.Operator = "Exists"
+		idx++
+	}
+	if idx < len(parts) {
+		tol.Effect = parts[idx]
+		idx++
+	}
+	if idx < len(parts) {
+		n, err := strconv.ParseInt(parts[idx], 10, 64)
+		if err != nil {
+			return tol, fmt.Errorf("%s: toleration %q has non-numeric tolerationSeconds %q", path, entry, parts[idx])
+		}
+		tol.TolerationSeconds = &n
+		idx++
+	}
+	return tol, nil
+}
+
+// tolerationFromMap fills one toleration from a JSON object:
+// key, operator, value, effect, tolerationSeconds.
+func tolerationFromMap(m map[string]any, path string) (api.Toleration, error) {
+	var tol api.Toleration
+	if err := checkKeys(m, []string{"key", "operator", "value", "effect", "tolerationSeconds"}, path); err != nil {
+		return tol, err
+	}
+	if v, ok, err := strField(m, "key", path); err != nil {
+		return tol, err
+	} else if ok {
+		tol.Key = v
+	}
+	if v, ok, err := strField(m, "operator", path); err != nil {
+		return tol, err
+	} else if ok {
+		tol.Operator = v
+	}
+	if v, ok, err := strField(m, "value", path); err != nil {
+		return tol, err
+	} else if ok {
+		tol.Value = v
+	}
+	if v, ok, err := strField(m, "effect", path); err != nil {
+		return tol, err
+	} else if ok {
+		tol.Effect = v
+	}
+	if v, ok := m["tolerationSeconds"]; ok {
+		n, err := intField(v, path+".tolerationSeconds")
+		if err != nil {
+			return tol, err
+		}
+		tol.TolerationSeconds = &n
+	}
+	return tol, nil
 }
 
 // stringListField parses a list of strings. JSON manifests carry a
