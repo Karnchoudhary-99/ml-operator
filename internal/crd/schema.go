@@ -241,6 +241,16 @@ func SpecSchema() *schema {
 		prop("imagePullSecrets", arrSchema("Kubernetes secrets holding registry credentials for pulling the serving image (e.g. a docker-registry secret for a private registry). Empty means the pods pull without credentials. Each name must be a DNS-1123 subdomain — enforced by the operator, not the schema.",
 			strSchema("One secret name, e.g. \"regcred\".")),
 		),
+		prop("labels", &schema{
+			typ:                  "object",
+			description:          "Extra labels stamped onto every object the operator renders for this model (Deployments incl. pod template, Service, HPA, PDB) — for the team's own selectors, cost reports and dashboards. Keys must be valid label keys and values at most 63 characters; keys under app.kubernetes.io/ and ml-operator/ are rejected — enforced by the operator, not the schema. Never touches the operator's selectors.",
+			additionalProperties: strSchema(""),
+		}),
+		prop("annotations", &schema{
+			typ:                  "object",
+			description:          "Extra annotations stamped onto every object the operator renders for this model, next to the labels — free-form metadata for humans and tooling (owner, runbook URL). Keys must be valid annotation keys; keys under app.kubernetes.io/ and ml-operator/ are rejected — enforced by the operator, not the schema. Values are free-form strings, never selected on.",
+			additionalProperties: strSchema(""),
+		}),
 		prop("env", &schema{
 			typ:                  "object",
 			description:          "Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.",

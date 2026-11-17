@@ -278,6 +278,16 @@ spec:
                   items:
                     type: string
                     description: One secret name, e.g. "regcred".
+                labels:
+                  type: object
+                  description: Extra labels stamped onto every object the operator renders for this model (Deployments incl. pod template, Service, HPA, PDB) — for the team's own selectors, cost reports and dashboards. Keys must be valid label keys and values at most 63 characters; keys under app.kubernetes.io/ and ml-operator/ are rejected — enforced by the operator, not the schema. Never touches the operator's selectors.
+                  additionalProperties:
+                    type: string
+                annotations:
+                  type: object
+                  description: Extra annotations stamped onto every object the operator renders for this model, next to the labels — free-form metadata for humans and tooling (owner, runbook URL). Keys must be valid annotation keys; keys under app.kubernetes.io/ and ml-operator/ are rejected — enforced by the operator, not the schema. Values are free-form strings, never selected on.
+                  additionalProperties:
+                    type: string
                 env:
                   type: object
                   description: Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.
