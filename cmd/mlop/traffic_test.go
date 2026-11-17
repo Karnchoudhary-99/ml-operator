@@ -134,6 +134,66 @@ func TestTrafficBadCanaryAbortsThroughCLI(t *testing.T) {
 	}
 }
 
+// TestTrafficShowsInStatus proves the observation is visible:
+// `mlop status` prints a traffic line for the stable Deployment
+// (and a canary line while a canary is in flight), and --json
+// carries the same numbers.
+func TestTrafficShowsInStatus(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	v1 := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", v1); code != 0 {
+		t.Fatalf("apply v1 failed")
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2"); code != 0 {
+		t.Fatalf("ready v1 failed")
+	}
+
+	// No traffic yet: no traffic line, no traffic object.
+	code, out, _ := runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || strings.Contains(out, "traffic:") {
+		t.Fatalf("status before traffic exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp", "--json")
+	if code != 0 || strings.Contains(out, "\"traffic\"") {
+		t.Fatalf("status --json before traffic exit %d, out %q", code, out)
+	}
+
+	if code, _, _ := runCLIState(t, state, "traffic", "iris-mlp", "--requests", "1000", "--errors", "10", "--p95-ms", "180"); code != 0 {
+		t.Fatalf("traffic failed")
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "traffic:     1000 requests, 10 errors (1.00% error rate), p95 180ms") {
+		t.Fatalf("status after traffic exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp", "--json")
+	if code != 0 || !strings.Contains(out, "\"traffic\": {") || !strings.Contains(out, "\"requests\": 1000") || !strings.Contains(out, "\"errorRate\": 0.01") {
+		t.Fatalf("status --json after traffic exit %d, out %q", code, out)
+	}
+
+	// A canary in flight gets its own line and JSON object. Clean
+	// traffic here: the bad-traffic abort is covered by
+	// TestTrafficBadCanaryAbortsThroughCLI, and error traffic
+	// would abort this canary before the second status call.
+	canary := writeManifest(t, irisCanary)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", canary); code != 0 {
+		t.Fatalf("canary apply failed")
+	}
+	if code, _, _ := runCLIState(t, state, "ready", "iris-mlp", "--replicas", "2", "--canary"); code != 0 {
+		t.Fatalf("ready canary failed")
+	}
+	if code, _, _ := runCLIState(t, state, "traffic", "iris-mlp", "--canary", "--requests", "100", "--errors", "0", "--p95-ms", "180"); code != 0 {
+		t.Fatalf("canary traffic failed")
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "traffic canary: 100 requests, 0 errors (0.00% error rate), p95 180ms") {
+		t.Fatalf("status after canary traffic exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "status", "iris-mlp", "--json")
+	if code != 0 || !strings.Contains(out, "\"canaryTraffic\": {") || !strings.Contains(out, "\"requests\": 100") {
+		t.Fatalf("status --json after canary traffic exit %d, out %q", code, out)
+	}
+}
+
 // TestTrafficHealthyCanaryPromotesThroughCLI is the mirror image:
 // a canary fed clean traffic (0.5% errors against a 5% gate)
 // promotes instead of aborting.
