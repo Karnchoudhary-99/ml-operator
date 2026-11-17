@@ -108,6 +108,13 @@ type Reconciler struct {
 	// retry waits twice the previous one (default 100ms, set by
 	// New). Tests set it to 0 for instant retries.
 	ApplyRetryBackoff time.Duration
+	// windowDeferred is set by Reconcile's maintenance-window gate
+	// on a call that deferred work, and reset at the start of
+	// every Reconcile call. updateStatus reads it to stamp the
+	// WindowBlocked condition: True only on a reconcile that
+	// actually deferred something, never merely because the
+	// window is closed while the deployment is in sync.
+	windowDeferred bool
 
 	// rollouts is the per-deployment canary rollout state, keyed by
 	// "namespace/name". A done state (promoted or aborted) stays in
@@ -265,6 +272,10 @@ func (r *Reconciler) now() time.Time {
 
 // Reconcile converges the deployment at key ("namespace/name").
 func (r *Reconciler) Reconcile(key string) (Result, error) {
+	// The WindowBlocked condition reflects this call only: a
+	// reconcile that applies work must report False even when the
+	// previous call deferred.
+	r.windowDeferred = false
 	entry := r.Registry.Get(key)
 	if entry == nil {
 		// The deployment left the registry: garbage-collect any
@@ -427,6 +438,40 @@ func (r *Reconciler) Reconcile(key string) (Result, error) {
 
 	plan := r.plan(key, d, desired, desiredSvc, canary, green, desiredHPA, hasHPA, desiredPDB, hasPDB)
 	actions := plan
+
+	// Maintenance window: when the window is closed and this
+	// reconcile would change the cluster, defer everything — no
+	// applies, no rollout step, no promotion, no garbage
+	// collection — and say when the window opens next. The check
+	// sits after the plan so the gate never has to guess what
+	// would change, and before any cluster write so a canary
+	// cannot advance or promote outside the window. A reconcile
+	// with nothing to do (plan all NoOps, no rollout in flight)
+	// proceeds normally: an in-sync deployment is not "blocked",
+	// and its phase still reports. Rollout state is untouched by
+	// the deferral, so a canary resumes from the step it was on.
+	// An explicit `mlop repair` bypasses this on purpose: repair
+	// is a human decision, not an automatic change.
+	if w := d.Spec.MaintenanceWindow; w != nil && !w.ActiveAt(r.now()) && hasPendingWork(plan, hasRollout, rs, hasBlueGreen, bg) {
+		r.windowDeferred = true
+		ready := r.Cluster.ReadyReplicas(key)
+		phase := d.Status.Phase
+		if phase == "" {
+			phase = api.PhasePending
+		}
+		next := w.NextOpening(r.now())
+		nextStr := "unknown"
+		if !next.IsZero() {
+			nextStr = next.Format("Mon 15:04 UTC")
+		}
+		msg := fmt.Sprintf("waiting for maintenance window — next opens %s (%s)", nextStr, w.Describe())
+		if c := d.Status.ConditionFor("WindowBlocked"); c == nil || c.Status != "True" {
+			r.recordEvent(key, metrics.EventNormal, "WindowBlocked", msg)
+		}
+		r.updateStatus(key, d, phase, ready, "WindowBlocked", msg)
+		return Result{Phase: phase, Requeue: true, Message: msg}, nil
+	}
+
 	for _, a := range plan {
 		if err := r.retryApply(key, string(a.Kind), a.Key, func() error {
 			return r.apply(a, desired, canary, green, desiredSvc, desiredHPA, desiredPDB)
@@ -1324,6 +1369,20 @@ func (r *Reconciler) updateStatus(key string, d api.ModelDeployment, phase api.P
 		pausedMsg = "reconciliation suspended — resume with `mlop resume " + key + "`"
 	}
 	status.SetConditionAt(api.Condition{Type: "Paused", Status: boolStatus(d.Spec.Paused), Reason: pausedReason, Message: pausedMsg}, now)
+	// The WindowBlocked condition is set on every status write
+	// from the reconciler's per-call deferral flag (see
+	// windowDeferred): True only on a reconcile that actually
+	// deferred work outside the maintenance window. A deployment
+	// that is in sync outside its window reports False — nothing
+	// is blocked when there is nothing to do — and a deployment
+	// with no window at all reports False from its first status
+	// write.
+	blockedReason, blockedMsg := "WindowOpen", msg
+	if r.windowDeferred {
+		blockedReason = "WindowBlocked"
+		blockedMsg = msg
+	}
+	status.SetConditionAt(api.Condition{Type: "WindowBlocked", Status: boolStatus(r.windowDeferred), Reason: blockedReason, Message: blockedMsg}, now)
 	r.Registry.UpdateStatus(key, status)
 	// Audit trail: record the transition when the generation, the
 	// desired image/version, or the phase changed since the last
@@ -1417,6 +1476,23 @@ func withoutNoOp(actions []Action) []Action {
 		return actions[:0]
 	}
 	return actions
+}
+
+// hasPendingWork reports whether this reconcile would change the
+// cluster: any non-NoOp plan action, or a canary / blue-green
+// rollout in flight. A rollout in flight counts even when the
+// plan is empty, because its state machine may advance, promote,
+// abort, switch or fold — all cluster writes — and the
+// maintenance-window gate must hold those too. A rollout that
+// already finished (promoted or aborted) is status-only, so it
+// does not count.
+func hasPendingWork(plan []Action, hasRollout bool, rs rollout.State, hasBlueGreen bool, bg rollout.BlueGreenState) bool {
+	for _, a := range plan {
+		if a.Kind != ActionNoOp {
+			return true
+		}
+	}
+	return (hasRollout && !rs.Done) || (hasBlueGreen && !bg.Done)
 }
 
 func boolStatus(v bool) string {
