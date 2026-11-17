@@ -44,6 +44,7 @@ func Commands() []Command {
 		{Name: "ready", Description: "simulate pods passing the readiness gate", Flags: []string{"--replicas", "--canary", "--green"}, TakesName: true},
 		{Name: "load", Description: "simulate the model-load probe", Flags: []string{"--canary", "--green", "--loading", "--fail"}, TakesName: true},
 		{Name: "rollback", Description: "restore the previous image/version", TakesName: true},
+		{Name: "scale", Description: "set the desired replica count", Flags: []string{"--replicas", "--dry-run"}, TakesName: true},
 		{Name: "pause", Description: "suspend reconciliation for a deployment", TakesName: true},
 		{Name: "resume", Description: "clear the pause and reconcile immediately", TakesName: true},
 		{Name: "watch", Description: "poll until a deployment reaches a terminal phase", Flags: []string{"--interval", "--timeout", "--json", "--all"}, TakesName: true},
