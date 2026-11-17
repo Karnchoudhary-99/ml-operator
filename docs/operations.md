@@ -430,6 +430,48 @@ same effect without the flag. Try it end to end with
 `examples/backup-tour.sh` (backup → wipe → restore → tamper
 check).
 
+## Simulating traffic for the health gate
+
+Ready pods and a loaded model prove the new version runs; they
+say nothing about whether it serves well. The canary and
+blue-green gates judge error rate and p95 latency too — but only
+when something reports traffic. In the simulated world that is
+`mlop traffic`: one observation batch per invocation, against the
+stable Deployment by default, `--canary` or `--green` while a
+rollout is in flight.
+
+```bash
+mlop traffic iris-mlp --canary --requests 1000 --errors 5 --p95-ms 180
+mlop traffic iris-mlp --canary --requests 1000 --errors 30
+```
+
+Batches accumulate into cumulative counters in the cluster
+metrics, and the gate judges the cumulative error rate — a single
+bad batch keeps failing the gate until healthy batches dilute the
+rate back under the threshold. The p95 is the latest observation
+(a batch that reports none leaves the previous value alone), and
+traffic never disturbs the model-load probe or the CPU reading
+recorded alongside it. The observation persists in the state
+file, so it survives across invocations. `mlop status` shows it
+for the stable Deployment, plus a canary or green line while that
+rollout is in flight; `--json` carries the same numbers as
+`traffic` / `canaryTraffic` / `greenTraffic`.
+
+Two behaviours to know. First, the gate thresholds come from the
+manifest (`canary.gate` / `blueGreen.gate`, defaulting to 5%
+errors / 500ms p95), so the same traffic that passes one
+deployment's gate can fail another's — the canary manifest's 2%
+gate is tighter than the default on purpose. Second, three
+consecutive failed gates abort the rollout, and every reconcile
+counts: `mlop status` and `mlop rollout status` both reconcile,
+so checking on a failing canary spends its strikes. If a canary
+aborts on traffic, fix the model or loosen the gate and apply a
+new generation — the aborted generation never restarts, and
+feeding healthy traffic to a dead canary changes nothing (its
+Deployment is already gone). `examples/traffic-tour.sh` walks
+both stories end to end: clean traffic promotes, 20% errors
+abort.
+
 ## Metrics to watch
 
 The operator serves its Prometheus exposition on `--metrics-addr`
@@ -485,6 +527,17 @@ green pods are not ready yet (`mlop ready <name> --replicas N
 still loading (`mlop load <name> --canary` reports the probe
 state; a loading model holds without burning failure budget) or
 the step interval has not elapsed yet. Both clear on their own.
+
+**Gate fails on error rate or latency even though pods are
+ready.** The gate judges the *cumulative* error rate, not the
+last batch: check `mlop status` for the traffic line — one bad
+batch keeps failing the gate until healthy batches dilute it
+(`mlop traffic <name> --canary --requests 1000 --errors 0`
+brings the rate down). If the model really is erroring, fix it
+or loosen the gate in the manifest instead of diluting the
+evidence. Note the gate thresholds are per-manifest: the same
+traffic passes a 5% default gate and fails the canary example's
+2% one.
 
 **`apply` rejects the manifest.** Validation runs before anything
 is registered — fix the reported errors (bad name, limit below
@@ -581,13 +634,13 @@ state file than the one you applied to.
 
 ## End-to-end tours
 
-The sixteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The seventeen scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
 ready, canary or blue-green rollout, rollback, scale, pause/resume,
 backup/restore, batch apply, hardening, shell completion,
-maintenance windows, pod placement) and asserts the output at
+maintenance windows, pod placement, traffic simulation) and asserts the output at
 every step, so a tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all sixteen on
+(`examples/mlop-tour.sh`) or all of them; CI runs all seventeen on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`

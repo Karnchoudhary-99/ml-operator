@@ -43,6 +43,7 @@ with the desired state.
 - [x] Manual replica scaling (`mlop scale`, refuses when autoscaling owns replicas or the deployment is paused)
 - [x] Maintenance windows (`spec.maintenanceWindow`: weekly UTC window, reconciles that would change anything defer outside it — `internal/api/window.go`, `internal/controller/window_test.go`)
 - [x] Pod placement (`spec.placement`: nodeSelector + tolerations, so a GPU model lands on GPU nodes — `internal/api/placement_test.go`, `internal/render/render_test.go`)
+- [x] Traffic simulation (`mlop traffic`: error-rate + p95-latency observations feed the canary/blue-green health gate, cumulative across batches — `internal/controller/fake.go`, `cmd/mlop/traffic.go`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -206,6 +207,30 @@ A loading model holds the rollout at its weight without burning
 failure budget; a failed load fails the gate, and three
 consecutive failures abort the rollout. `examples/model-load-tour.sh`
 drives both stories end to end (hold-then-promote, fail-then-abort).
+
+Ready pods and a loaded model are still not traffic: the gate's
+error-rate and p95-latency checks stay skipped until something
+reports serving traffic. `mlop traffic` simulates that — one
+observation batch per invocation (`--requests` served, `--errors`
+of them failed, `--p95-ms` latency), with `--canary` targeting
+the canary Deployment:
+
+```bash
+mlop traffic iris-mlp --canary --requests 1000 --errors 5 --p95-ms 180
+# default/iris-mlp-canary: traffic 1000 requests, 5 errors (0.50% error rate, p95 180ms)
+#   — cumulative 1000 requests, 5 errors (0.50%) — phase=Progressing (2/2 ready)
+mlop traffic iris-mlp --canary --requests 100 --errors 20 --p95-ms 180
+#   20% errors against the canary manifest's 2% gate: a real gate failure
+```
+
+Batches accumulate, so the gate judges the cumulative error rate:
+a bad batch keeps failing the gate until healthy batches dilute
+it back under the threshold, and the rate persists across
+invocations (it lives in the cluster metrics in the state file).
+`mlop status` shows the observation for the stable Deployment and,
+while a rollout is in flight, a canary or green line beside it.
+`examples/traffic-tour.sh` drives both stories end to end
+(clean traffic promotes, bad traffic aborts).
 
 `mlop logs` shows the recorded events for a deployment (newest
 first; only notable transitions are recorded — promotions, scale

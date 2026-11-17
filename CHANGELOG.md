@@ -8,6 +8,20 @@ the first public version is cut.
 
 ### Added
 
+- Traffic simulation — `mlop traffic <name> [--canary | --green]
+  --requests N [--errors E] [--p95-ms M]`, feeding serving-traffic
+  observations into the cluster metrics so the canary and
+  blue-green health gates finally judge error rate and p95 latency
+  instead of staying readiness-only. Batches accumulate into
+  cumulative counters (the gate judges the cumulative error rate,
+  so a bad batch keeps failing until healthy batches dilute it),
+  the latest p95 wins, and the model-load probe and CPU state
+  recorded alongside survive. `mlop status` shows the observation
+  for the stable Deployment (plus canary/green lines while those
+  rollouts are in flight), `--json` carries the same numbers, and
+  `examples/traffic-tour.sh` walks both stories end to end: clean
+  traffic promotes the canary, 20% errors abort it after three
+  failed gates.
 - Pod placement — `spec.placement` (nodeSelector + tolerations),
   pinning a model's pods to nodes: a GPU model lands on a GPU
   node (labelled, usually tainted) instead of anywhere the
