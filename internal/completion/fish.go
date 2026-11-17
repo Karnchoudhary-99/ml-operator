@@ -104,6 +104,12 @@ func flagDescription(f string) string {
 		return "report that the model is still loading"
 	case "--fail":
 		return "report that the model failed to load"
+	case "--requests":
+		return "requests served in this batch"
+	case "--errors":
+		return "failed requests in this batch"
+	case "--p95-ms":
+		return "p95 request latency in milliseconds"
 	case "--interval":
 		return "how often to re-check"
 	case "--timeout":
