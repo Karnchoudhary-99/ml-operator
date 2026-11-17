@@ -55,6 +55,11 @@ usual ones:
   the kubelet would refuse to start the pod, so the operator
   refuses the manifest instead. Set `runAsNonRoot: false` to run
   as root, or pick a non-zero uid.
+- **placement mistakes** — a toleration `value` with operator
+  `Exists` (Exists matches on the key alone), `tolerationSeconds`
+  without effect `NoExecute`, or a `nodeSelector` key that is not
+  a valid label key (letters, digits, `-`, `_`, `.`, with an
+  optional DNS prefix before `/`). The error names the field.
 
 ## `apply` fails and the deployment goes `Degraded` with `ApplyFailed`
 

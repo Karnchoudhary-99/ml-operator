@@ -42,6 +42,7 @@ with the desired state.
 - [x] Pod security hardening (`spec.security`: non-root uid, read-only rootfs, no privilege escalation, drop ALL, RuntimeDefault seccomp — hardened by default)
 - [x] Manual replica scaling (`mlop scale`, refuses when autoscaling owns replicas or the deployment is paused)
 - [x] Maintenance windows (`spec.maintenanceWindow`: weekly UTC window, reconciles that would change anything defer outside it — `internal/api/window.go`, `internal/controller/window_test.go`)
+- [x] Pod placement (`spec.placement`: nodeSelector + tolerations, so a GPU model lands on GPU nodes — `internal/api/placement_test.go`, `internal/render/render_test.go`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -605,6 +606,46 @@ and a contradiction is rejected at apply time — `runAsUser: 0` with
 privilege escalation off, drop ALL, seccomp RuntimeDefault`), and
 `mlop diff` names each moved field before it applies.
 `examples/security-tour.sh` walks the whole story end to end.
+
+### Pod placement
+
+`spec.placement` pins a model's pods to nodes: a `nodeSelector`
+(the pod's node must carry every listed label) and `tolerations`
+(the node taints the pod accepts). Absent means unconstrained —
+the scheduler places the pods anywhere. This is how a GPU model
+lands on a GPU node: GPU nodes are usually tainted (so only GPU
+workloads schedule there) and labelled (so the selector finds
+them):
+
+```yaml
+spec:
+  placement:
+    nodeSelector:
+      accelerator: nvidia-tesla-t4
+    tolerations: gpu=true:NoSchedule, dedicated:Exists:NoExecute:300
+```
+
+Placement is a property of the model, not of one revision:
+canary and green Deployments inherit it, so a rollout never
+silently moves the model off its nodes. A toleration is
+`key[=value][:Exists][:effect][:seconds]` — an `=` means operator
+Equal, `:Exists` means operator Exists (and the value must be
+absent), the effect is `NoSchedule`, `PreferNoSchedule` or
+`NoExecute`, and the seconds are only meaningful with `NoExecute`
+(`dedicated:Exists:NoExecute:300` stays bound for 5 minutes after
+the taint appears; without seconds a `NoExecute` taint evicts the
+pod at once). JSON manifests carry a real array of toleration
+objects instead (`{"key": "gpu", "operator": "Equal", "value":
+"true", "effect": "NoSchedule"}`). `mlop validate` warns about
+the broad cases — an Exists toleration with an empty key
+(tolerates every taint) and a `NoExecute` toleration with no grace
+period — and rejects the contradictions at apply time (a value
+with operator Exists, seconds without `NoExecute`). `mlop status
+<name>` shows the placement (`placement: nodeSelector
+accelerator=nvidia-tesla-t4, tolerations gpu=true:NoSchedule`),
+and `mlop diff` names a nodeSelector or tolerations change before
+it applies. `examples/placement-tour.sh` walks the whole story
+end to end.
 
 ### Autoscaling
 

@@ -8,6 +8,20 @@ the first public version is cut.
 
 ### Added
 
+- Pod placement — `spec.placement` (nodeSelector + tolerations),
+  pinning a model's pods to nodes: a GPU model lands on a GPU
+  node (labelled, usually tainted) instead of anywhere the
+  scheduler fancies, and a rollout never silently moves it off
+  — canary and green Deployments inherit the placement. YAML
+  manifests write tolerations as a comma-separated compact string
+  (`gpu=true:NoSchedule, dedicated:Exists:NoExecute:300`); JSON
+  carries a real array of toleration objects. `mlop validate`
+  warns about the broad cases (an Exists toleration with an empty
+  key, a `NoExecute` toleration with no grace period) and rejects
+  the contradictions at apply time (a value with operator Exists,
+  seconds without `NoExecute`). `mlop status` shows the placement
+  and `mlop diff` names a nodeSelector or tolerations change, and
+  `examples/placement-tour.sh` walks the whole story end to end.
 - Maintenance windows — `spec.maintenanceWindow` (weekly UTC
   schedule: days as three-letter abbreviations, `start`/`end`
   as `"HH:MM"`, overnight windows allowed), deferring every

@@ -1,6 +1,11 @@
 package api
 
-import "time"
+import (
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // Phase is the lifecycle phase of a ModelDeployment, reported in status.
 type Phase string
@@ -95,6 +100,21 @@ type ModelDeploymentSpec struct {
 	// as root must say so explicitly, and `mlop validate` warns
 	// about every relaxation.
 	Security *SecuritySpec
+	// Placement pins the model's pods to nodes: which nodes
+	// they may run on (nodeSelector) and which node taints
+	// they tolerate (tolerations). Nil means unconstrained:
+	// the scheduler places the pods anywhere. This is how a
+	// GPU model lands on a GPU node — GPU nodes are usually
+	// tainted (so only GPU workloads schedule there) and
+	// labelled (so the selector finds them) — and how a
+	// latency-sensitive model stays off preemptible nodes.
+	// Placement is a property of the model, not of one
+	// revision: canary and green Deployments inherit it, so a
+	// rollout never silently moves the model off its nodes.
+	// It has no operator defaults to fill in: an absent
+	// placement is a real choice (schedule anywhere), not an
+	// omission, so ApplyDefaults leaves it alone.
+	Placement *PlacementSpec
 	// Paused suspends reconciliation for this deployment: while
 	// true the operator makes no cluster changes, advances no
 	// rollout, and applies no autoscaling decision — the live
@@ -377,6 +397,100 @@ func (s *SecuritySpec) EffectiveSeccompProfile() string {
 		return DefaultSeccompProfile
 	}
 	return s.SeccompProfile
+}
+
+// PlacementSpec pins a model's pods to nodes: the node labels
+// they require and the node taints they tolerate. Either half
+// may be used alone — a nodeSelector without tolerations, or
+// tolerations without a selector — and an empty (non-nil) spec
+// is the same as no placement at all.
+type PlacementSpec struct {
+	// NodeSelector requires the pod's node to carry every
+	// listed label (e.g. {"accelerator": "nvidia-tesla-t4"}).
+	// Empty means no label requirement.
+	NodeSelector map[string]string
+	// Tolerations lists the node taints the pod tolerates.
+	// Empty means the pod tolerates nothing: a tainted node
+	// rejects it.
+	Tolerations []Toleration
+}
+
+// Toleration mirrors the Kubernetes corev1.Toleration, trimmed
+// to the fields this operator sets. Operator "" means Equal;
+// Effect "" matches a taint of any effect.
+type Toleration struct {
+	// Key is the taint key to tolerate. Empty with operator
+	// Exists matches every taint key.
+	Key string
+	// Operator is "Equal" (key and value must both match) or
+	// "Exists" (the key alone must exist; Value must be
+	// empty). "" means "Equal".
+	Operator string
+	// Value is the taint value to tolerate. Must be empty
+	// when Operator is "Exists".
+	Value string
+	// Effect is the taint effect to tolerate: "NoSchedule",
+	// "PreferNoSchedule", "NoExecute", or "" (any effect).
+	Effect string
+	// TolerationSeconds is how long the pod stays bound after
+	// the matching taint appears. Only meaningful with
+	// effect NoExecute; nil means evict immediately.
+	TolerationSeconds *int64
+}
+
+// Describe renders placement as one line for `mlop status`,
+// e.g. "nodeSelector accelerator=nvidia-tesla-t4, tolerations
+// gpu=true:NoSchedule". A nil or empty placement describes as
+// "unconstrained".
+func (p *PlacementSpec) Describe() string {
+	if p == nil || (len(p.NodeSelector) == 0 && len(p.Tolerations) == 0) {
+		return "unconstrained"
+	}
+	var parts []string
+	if len(p.NodeSelector) > 0 {
+		keys := make([]string, 0, len(p.NodeSelector))
+		for k := range p.NodeSelector {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		sel := make([]string, 0, len(keys))
+		for _, k := range keys {
+			sel = append(sel, k+"="+p.NodeSelector[k])
+		}
+		parts = append(parts, "nodeSelector "+strings.Join(sel, ","))
+	}
+	if len(p.Tolerations) > 0 {
+		tols := make([]string, 0, len(p.Tolerations))
+		for _, t := range p.Tolerations {
+			tols = append(tols, t.String())
+		}
+		parts = append(parts, "tolerations "+strings.Join(tols, ", "))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// String renders one toleration in the compact form the YAML
+// manifest dialect uses: "key=value:Effect",
+// "key:Exists:Effect", "key=value:NoExecute:300". The effect
+// is omitted when empty, the seconds when unset.
+func (t Toleration) String() string {
+	var b strings.Builder
+	b.WriteString(t.Key)
+	if t.Operator == "Exists" {
+		b.WriteString(":Exists")
+	} else if t.Value != "" {
+		b.WriteString("=")
+		b.WriteString(t.Value)
+	}
+	if t.Effect != "" {
+		b.WriteString(":")
+		b.WriteString(t.Effect)
+	}
+	if t.TolerationSeconds != nil {
+		b.WriteString(":")
+		b.WriteString(strconv.FormatInt(*t.TolerationSeconds, 10))
+	}
+	return b.String()
 }
 
 // AutoscalingSpec configures horizontal autoscaling for the model.

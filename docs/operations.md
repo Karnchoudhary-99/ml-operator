@@ -383,6 +383,29 @@ manifest instead. `mlop status <name>` shows the effective values
 and `mlop diff` names each moved field before it applies.
 `examples/security-tour.sh` drives all of it end to end.
 
+## Pod placement
+
+`spec.placement` pins a model's pods to nodes. `nodeSelector` is
+a label map the pod's node must satisfy
+(`{"accelerator": "nvidia-tesla-t4"}`); `tolerations` is the list
+of node taints the pods accept, so a model can schedule onto
+tainted GPU or dedicated nodes that reject everything else. The
+YAML dialect has no lists, so tolerations are a comma-separated
+string of compact entries (`gpu=true:NoSchedule,
+dedicated:Exists:NoExecute:300`) while JSON manifests carry a real
+array of objects — both forms parse to the same tolerations, and
+`mlop status` prints the compact form, so its output pastes
+straight back into a manifest. Placement renders onto the stable,
+canary and green Deployments alike, and `mlop diff` names a
+nodeSelector or tolerations change before it applies. The operator
+validates the block at apply time (label keys and values, operator
+Equal or Exists, a value only under Equal, seconds only with
+`NoExecute`) and `mlop validate` warns about the broad cases: an
+Exists toleration with an empty key tolerates every taint, and a
+`NoExecute` toleration without seconds evicts the pod the moment
+the taint appears. `examples/placement-tour.sh` drives all of it
+end to end.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a
@@ -558,13 +581,13 @@ state file than the one you applied to.
 
 ## End-to-end tours
 
-The fifteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The sixteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
 ready, canary or blue-green rollout, rollback, scale, pause/resume,
 backup/restore, batch apply, hardening, shell completion,
-maintenance windows) and asserts the output at
+maintenance windows, pod placement) and asserts the output at
 every step, so a tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all fifteen on
+(`examples/mlop-tour.sh`) or all of them; CI runs all sixteen on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`

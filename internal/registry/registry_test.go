@@ -402,6 +402,77 @@ func TestSpecsEqualSecurity(t *testing.T) {
 	}
 }
 
+// TestSpecsEqualPlacement: a placement-only change is a spec
+// change — it must bump the generation on apply, or the
+// reconciler would never render the new nodes. The maintenance
+// window bug this guards against: SpecsEqual ignored the window,
+// so a re-windowed manifest was treated as unchanged and the
+// reconciler kept the old window.
+func TestSpecsEqualPlacement(t *testing.T) {
+	int64Ptr := func(v int64) *int64 { return &v }
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Replicas: func() *int32 { v := int32(3); return &v }(),
+			Strategy: api.StrategyRolling,
+			Placement: &api.PlacementSpec{
+				NodeSelector: map[string]string{"accelerator": "nvidia-tesla-t4"},
+				Tolerations: []api.Toleration{
+					{Key: "gpu", Value: "true", Effect: "NoSchedule"},
+					{Key: "dedicated", Operator: "Exists", Effect: "NoExecute", TolerationSeconds: int64Ptr(300)},
+				},
+			},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical placement specs should be equal")
+	}
+	// Same values through fresh pointers must still be equal:
+	// the state file round-trips through JSON, so pointer
+	// identity can never be the comparison.
+	b = base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("placement specs with equal values but fresh pointers should be equal")
+	}
+	// Map order is meaningless: a re-ordered nodeSelector is
+	// the same placement.
+	b = base()
+	b.Placement.NodeSelector = map[string]string{"accelerator": "nvidia-tesla-t4"}
+	if !SpecsEqual(a, b) {
+		t.Fatal("re-ordered nodeSelector should still be equal")
+	}
+	for _, mutate := range []struct {
+		name string
+		f    func(*api.PlacementSpec)
+	}{
+		{"nodeSelector value", func(p *api.PlacementSpec) { p.NodeSelector["accelerator"] = "nvidia-tesla-v100" }},
+		{"nodeSelector key added", func(p *api.PlacementSpec) { p.NodeSelector["zone"] = "a" }},
+		{"toleration value", func(p *api.PlacementSpec) { p.Tolerations[0].Value = "false" }},
+		{"toleration effect", func(p *api.PlacementSpec) { p.Tolerations[0].Effect = "PreferNoSchedule" }},
+		{"toleration operator", func(p *api.PlacementSpec) { p.Tolerations[0].Operator = "Exists" }},
+		{"toleration seconds", func(p *api.PlacementSpec) { p.Tolerations[1].TolerationSeconds = int64Ptr(60) }},
+		{"toleration removed", func(p *api.PlacementSpec) { p.Tolerations = p.Tolerations[:1] }},
+	} {
+		b = base()
+		mutate.f(b.Placement)
+		if SpecsEqual(a, b) {
+			t.Fatalf("different %s should not be equal", mutate.name)
+		}
+	}
+	b = base()
+	b.Placement.Tolerations[1].TolerationSeconds = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil tolerationSeconds vs set seconds should not be equal")
+	}
+	b = base()
+	b.Placement = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil placement block vs set block should not be equal")
+	}
+}
+
 // TestSpecsEqualPaused: toggling Paused is a spec change — it must
 // bump the generation on apply, or a paused manifest would be
 // reported unchanged and the reconciler would never see the flag.
