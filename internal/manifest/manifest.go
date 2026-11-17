@@ -84,7 +84,7 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
 		"canary", "blueGreen", "autoscaling", "availability", "security", "env", "health",
-		"paused",
+		"paused", "maintenanceWindow",
 	}, "spec"); err != nil {
 		return err
 	}
@@ -167,6 +167,35 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 			return err
 		}
 		s.Paused = b
+	}
+
+	if raw, ok := spec["maintenanceWindow"]; ok {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("spec.maintenanceWindow: must be a mapping")
+		}
+		if err := checkKeys(m, []string{"days", "start", "end"}, "spec.maintenanceWindow"); err != nil {
+			return err
+		}
+		w := &api.MaintenanceWindowSpec{}
+		if v, ok := m["days"]; ok {
+			days, err := stringListField(v, "spec.maintenanceWindow.days")
+			if err != nil {
+				return err
+			}
+			w.Days = days
+		}
+		if v, ok, err := strField(m, "start", "spec.maintenanceWindow"); err != nil {
+			return err
+		} else if ok {
+			w.Start = v
+		}
+		if v, ok, err := strField(m, "end", "spec.maintenanceWindow"); err != nil {
+			return err
+		} else if ok {
+			w.End = v
+		}
+		s.MaintenanceWindow = w
 	}
 
 	if v, ok, err := strField(spec, "strategy", "spec"); err != nil {
@@ -496,10 +525,8 @@ func boolField(raw any, path string) (bool, error) {
 
 // stringListField parses a list of strings. JSON manifests carry a
 // real array; the YAML dialect has no lists, so a YAML manifest
-// writes a comma-separated string ("NET_BIND_SERVICE, SYS_TIME").
-// An empty value parses to an empty list, which ApplyDefaults
-// treats as "drop ALL" (see SecuritySpec) — there is no spelling
-// for "drop nothing", by design.
+// writes a comma-separated string ("Mon, Wed, Fri"). An empty
+// value parses to an empty list.
 func stringListField(raw any, path string) ([]string, error) {
 	switch v := raw.(type) {
 	case string:
@@ -511,7 +538,7 @@ func stringListField(raw any, path string) ([]string, error) {
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
 			if p == "" {
-				return nil, fmt.Errorf("%s: empty capability in %q", path, v)
+				return nil, fmt.Errorf("%s: empty entry in %q", path, v)
 			}
 			out = append(out, p)
 		}

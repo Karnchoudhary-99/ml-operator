@@ -320,3 +320,43 @@ func TestParsePaused(t *testing.T) {
 		t.Fatal("non-boolean paused should be a parse error")
 	}
 }
+
+// TestParseMaintenanceWindow pins the maintenanceWindow block: the
+// YAML dialect has no lists, so days arrive comma-separated; JSON
+// carries a real array. A partial block parses (validation is
+// ApplyDefaults + Validate's job, not the parser's).
+func TestParseMaintenanceWindow(t *testing.T) {
+	d, err := Parse([]byte("name: x\nspec:\n  maintenanceWindow:\n    days: Mon, Wed, Fri\n    start: 02:00\n    end: 04:00\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	w := d.Spec.MaintenanceWindow
+	if w == nil || w.Start != "02:00" || w.End != "04:00" {
+		t.Fatalf("YAML window = %+v", w)
+	}
+	if len(w.Days) != 3 || w.Days[0] != "Mon" || w.Days[1] != "Wed" || w.Days[2] != "Fri" {
+		t.Fatalf("YAML days = %v, want [Mon Wed Fri]", w.Days)
+	}
+	d, err = Parse([]byte(`{"name":"x","spec":{"maintenanceWindow":{"days":["Sat","Sun"],"start":"22:00","end":"02:00"}}}`))
+	if err != nil {
+		t.Fatalf("Parse JSON: %v", err)
+	}
+	w = d.Spec.MaintenanceWindow
+	if w == nil || len(w.Days) != 2 || w.Days[0] != "Sat" || w.Start != "22:00" || w.End != "02:00" {
+		t.Fatalf("JSON window = %+v", w)
+	}
+	d, err = Parse([]byte("name: x\nspec:\n  maintenanceWindow:\n    start: 02:00\n    end: 04:00\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	w = d.Spec.MaintenanceWindow
+	if w == nil || len(w.Days) != 0 || w.Start != "02:00" {
+		t.Fatalf("window without days = %+v, want empty days (every day)", w)
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  maintenanceWindow:\n    days: Mon, Tue\n    start: 02:00\n    end: 04:00\n    timezone: UTC\n")); err == nil {
+		t.Fatal("unknown maintenanceWindow key should be a parse error")
+	}
+	if _, err := Parse([]byte("name: x\nspec:\n  maintenanceWindow: nightly\n")); err == nil {
+		t.Fatal("non-mapping maintenanceWindow should be a parse error")
+	}
+}
