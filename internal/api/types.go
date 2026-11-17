@@ -143,6 +143,32 @@ type ModelDeploymentSpec struct {
 	// no operator defaults: an absent list is a real choice,
 	// so ApplyDefaults leaves it alone.
 	ImagePullSecrets []string
+	// Labels are extra labels the operator stamps onto every
+	// object it renders for this model — the Deployments
+	// (object and pod template), the Service, the HPA and
+	// the PDB — so the model shows up in the team's own
+	// selectors, cost reports and dashboards (e.g.
+	// team: search, cost-center: ml-platform). They never
+	// touch the operator's selectors: the Service and the
+	// Deployments keep selecting on the fixed base labels,
+	// so a label change re-renders the objects but can
+	// never orphan pods or steal traffic. Like placement,
+	// it is a property of the model, not of one revision:
+	// canary and green Deployments inherit it, so a rollout
+	// never silently drops the team's labels. It has no
+	// operator defaults: an absent map is a real choice, so
+	// ApplyDefaults leaves it alone.
+	Labels map[string]string
+	// Annotations are extra annotations the operator stamps
+	// onto every object it renders for this model, next to
+	// the labels: free-form metadata for humans and tooling
+	// (e.g. owner: team-search, runbook: https://…), with
+	// no length limit beyond the Kubernetes 256KB object
+	// annotation budget. Unlike labels they are never
+	// selected on, so anything that is not a label belongs
+	// here. They travel with the labels: same objects, same
+	// inheritance across revisions, no defaults.
+	Annotations map[string]string
 	// Paused suspends reconciliation for this deployment: while
 	// true the operator makes no cluster changes, advances no
 	// rollout, and applies no autoscaling decision — the live
@@ -573,6 +599,28 @@ func DescribeImagePullSecrets(secrets []string) string {
 		return "none"
 	}
 	return strings.Join(secrets, ", ")
+}
+
+// DescribeMetadata renders a labels or annotations map as one
+// sorted, comma-separated "k=v" line for `mlop status`, e.g.
+// "team=search, cost-center=ml-platform". Sorting makes the
+// output stable no matter what order the manifest listed the
+// entries in, so the line pastes straight back into a manifest
+// and diffs cleanly. An empty map describes as "none".
+func DescribeMetadata(m map[string]string) string {
+	if len(m) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+m[k])
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Toleration mirrors the Kubernetes corev1.Toleration, trimmed
