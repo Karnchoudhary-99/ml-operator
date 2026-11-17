@@ -97,6 +97,16 @@ type Deployment struct {
 	// the pod template; empty when the Deployment has a single
 	// replica (nothing to spread).
 	TopologySpread []TopologySpreadConstraint
+	// NodeSelector pins the pod template's pods to nodes
+	// carrying these labels; nil means unconstrained. Like
+	// PodSecurity, placement is a property of the model, not
+	// of one revision: canary and green Deployments inherit
+	// it from DeploymentFor, so a rollout never silently
+	// moves the model off its nodes.
+	NodeSelector map[string]string
+	// Tolerations lists the node taints the pod template's
+	// pods tolerate; nil means the pods tolerate nothing.
+	Tolerations []api.Toleration
 }
 
 // Service is the rendered ClusterIP Service fronting a model.
@@ -215,6 +225,12 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 			RunAsUser:      d.Spec.Security.EffectiveRunAsUser(),
 			SeccompProfile: d.Spec.Security.EffectiveSeccompProfile(),
 		},
+		// Placement has no defaults to resolve, so it renders
+		// as written — but the map and slice are copied, so a
+		// caller mutating the spec afterwards cannot silently
+		// move a Deployment that was already rendered.
+		NodeSelector: copyStringMap(placementOf(d).NodeSelector),
+		Tolerations:  copyTolerations(placementOf(d).Tolerations),
 	}
 	// Hardening travels with the pod template: anti-affinity and
 	// the spread constraint apply to canary and green Deployments
@@ -476,6 +492,16 @@ func DeploymentDiffReasons(desired, live Deployment) []string {
 	if !stringSliceEqual(dc.DropCapabilities, lc.DropCapabilities) {
 		reasons = append(reasons, "dropCapabilities changed")
 	}
+	// Placement is rendered onto every Deployment, so a
+	// placement change is a Deployment change: the reconciler
+	// re-applies and `mlop diff` names it, instead of the drift
+	// check silently reporting the Deployment in sync.
+	if !labelsEqual(desired.NodeSelector, live.NodeSelector) {
+		reasons = append(reasons, "nodeSelector changed")
+	}
+	if !tolerationsEqual(desired.Tolerations, live.Tolerations) {
+		reasons = append(reasons, "tolerations changed")
+	}
 	return reasons
 }
 
@@ -569,6 +595,73 @@ func topologySpreadEqual(a, b []TopologySpreadConstraint) bool {
 			a[i].TopologyKey != b[i].TopologyKey ||
 			a[i].WhenUnsatisfiable != b[i].WhenUnsatisfiable ||
 			!labelsEqual(a[i].LabelSelector, b[i].LabelSelector) {
+			return false
+		}
+	}
+	return true
+}
+
+// placementOf returns the placement spec, or an empty one when the
+// deployment is unconstrained, so renderers never nil-dereference
+// a nil Placement pointer.
+func placementOf(d api.ModelDeployment) api.PlacementSpec {
+	if d.Spec.Placement == nil {
+		return api.PlacementSpec{}
+	}
+	return *d.Spec.Placement
+}
+
+// copyStringMap copies a label map, or nil when the input is nil,
+// so a rendered Deployment never aliases the spec's map.
+func copyStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// copyTolerations copies a toleration list, or nil when the input
+// is nil. TolerationSeconds is a pointer, so its value is copied
+// too — a later mutation of the spec's seconds must not move a
+// Deployment that was already rendered.
+func copyTolerations(in []api.Toleration) []api.Toleration {
+	if in == nil {
+		return nil
+	}
+	out := make([]api.Toleration, len(in))
+	copy(out, in)
+	for i := range out {
+		if in[i].TolerationSeconds != nil {
+			s := *in[i].TolerationSeconds
+			out[i].TolerationSeconds = &s
+		}
+	}
+	return out
+}
+
+// tolerationsEqual compares two toleration lists by value: the
+// operator, key, value, effect and seconds of every entry, in
+// order. A plain slice comparison would compare the
+// TolerationSeconds pointers, not the seconds, so a spec that
+// survived a JSON round-trip (state file) would never equal a
+// freshly parsed manifest with the same tolerations.
+func tolerationsEqual(a, b []api.Toleration) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Key != b[i].Key || a[i].Operator != b[i].Operator ||
+			a[i].Value != b[i].Value || a[i].Effect != b[i].Effect {
+			return false
+		}
+		if (a[i].TolerationSeconds == nil) != (b[i].TolerationSeconds == nil) {
+			return false
+		}
+		if a[i].TolerationSeconds != nil && *a[i].TolerationSeconds != *b[i].TolerationSeconds {
 			return false
 		}
 	}

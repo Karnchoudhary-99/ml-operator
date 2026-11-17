@@ -454,10 +454,97 @@ func TestDeploymentHardening(t *testing.T) {
 	}
 }
 
-// TestDeploymentDiffReasonsHardening pins the diff: an
-// anti-affinity flip and a spread change each surface as a reason,
-// so the reconciler updates the Deployment instead of reporting a
-// no-op.
+// TestDeploymentPlacement pins the render: a placement block
+// lands on the pod template of the stable Deployment and is
+// inherited by canary and green Deployments, so a rollout never
+// silently moves the model off its nodes. An unconstrained
+// deployment renders no selector and no tolerations.
+func TestDeploymentPlacement(t *testing.T) {
+	d := dep()
+	got := DeploymentFor(d)
+	if got.NodeSelector != nil || got.Tolerations != nil {
+		t.Fatalf("unconstrained Deployment must render no placement, got %v / %v", got.NodeSelector, got.Tolerations)
+	}
+
+	secs := int64(300)
+	d.Spec.Placement = &api.PlacementSpec{
+		NodeSelector: map[string]string{"accelerator": "nvidia-tesla-t4"},
+		Tolerations: []api.Toleration{
+			{Key: "gpu", Value: "true", Effect: "NoSchedule"},
+			{Key: "dedicated", Operator: "Exists", Effect: "NoExecute", TolerationSeconds: &secs},
+		},
+	}
+	got = DeploymentFor(d)
+	if got.NodeSelector["accelerator"] != "nvidia-tesla-t4" {
+		t.Fatalf("nodeSelector wrong: %v", got.NodeSelector)
+	}
+	if len(got.Tolerations) != 2 || got.Tolerations[0].Key != "gpu" || got.Tolerations[0].Value != "true" ||
+		got.Tolerations[1].Operator != "Exists" || *got.Tolerations[1].TolerationSeconds != 300 {
+		t.Fatalf("tolerations wrong: %+v", got.Tolerations)
+	}
+	// Placement is a property of the model, not of one revision:
+	// canary and green Deployments inherit it, so a rollout
+	// never silently moves the model off its nodes.
+	canary := CanaryDeploymentFor(d)
+	if canary.NodeSelector["accelerator"] != "nvidia-tesla-t4" || len(canary.Tolerations) != 2 {
+		t.Fatalf("canary did not inherit the placement: %v / %+v", canary.NodeSelector, canary.Tolerations)
+	}
+	green := GreenDeploymentFor(d)
+	if green.NodeSelector["accelerator"] != "nvidia-tesla-t4" || len(green.Tolerations) != 2 {
+		t.Fatalf("green did not inherit the placement: %v / %+v", green.NodeSelector, green.Tolerations)
+	}
+	// The render copies the placement: mutating the spec after
+	// rendering must not move a Deployment that was already
+	// rendered.
+	d.Spec.Placement.NodeSelector["accelerator"] = "other"
+	*d.Spec.Placement.Tolerations[1].TolerationSeconds = 60
+	if got.NodeSelector["accelerator"] != "nvidia-tesla-t4" || *got.Tolerations[1].TolerationSeconds != 300 {
+		t.Fatalf("render aliased the spec placement: %v / %+v", got.NodeSelector, got.Tolerations)
+	}
+}
+
+// TestDeploymentDiffReasonsPlacement pins the diff: a
+// nodeSelector change and a tolerations change each surface as a
+// reason, so the reconciler updates the Deployment instead of
+// reporting a no-op — and a JSON round-trip of the seconds does
+// not produce a phantom diff.
+func TestDeploymentDiffReasonsPlacement(t *testing.T) {
+	d := dep()
+	d.Spec.Placement = &api.PlacementSpec{
+		NodeSelector: map[string]string{"accelerator": "nvidia-tesla-t4"},
+		Tolerations:  []api.Toleration{{Key: "gpu", Value: "true", Effect: "NoSchedule"}},
+	}
+	desired := DeploymentFor(d)
+	if reasons := DeploymentDiffReasons(desired, desired); len(reasons) != 0 {
+		t.Fatalf("identical Deployments differ: %v", reasons)
+	}
+	live := desired
+	live.NodeSelector = map[string]string{"accelerator": "nvidia-tesla-v100"}
+	if reasons := DeploymentDiffReasons(desired, live); len(reasons) != 1 || reasons[0] != "nodeSelector changed" {
+		t.Fatalf("Deployment diff = %v, want [nodeSelector changed]", reasons)
+	}
+	live = desired
+	live.Tolerations = []api.Toleration{{Key: "gpu", Value: "true", Effect: "PreferNoSchedule"}}
+	if reasons := DeploymentDiffReasons(desired, live); len(reasons) != 1 || reasons[0] != "tolerations changed" {
+		t.Fatalf("Deployment diff = %v, want [tolerations changed]", reasons)
+	}
+	// Seconds compare by value, not by pointer: a spec that
+	// survived a JSON round-trip (state file) must still equal
+	// the freshly rendered Deployment.
+	secs := int64(300)
+	d.Spec.Placement.Tolerations = []api.Toleration{
+		{Key: "dedicated", Operator: "Exists", Effect: "NoExecute", TolerationSeconds: &secs},
+	}
+	desired = DeploymentFor(d)
+	live = desired
+	other := int64(300)
+	live.Tolerations = []api.Toleration{
+		{Key: "dedicated", Operator: "Exists", Effect: "NoExecute", TolerationSeconds: &other},
+	}
+	if reasons := DeploymentDiffReasons(desired, live); len(reasons) != 0 {
+		t.Fatalf("same toleration seconds via different pointers differ: %v", reasons)
+	}
+}
 func TestDeploymentDiffReasonsHardening(t *testing.T) {
 	d := dep()
 	desired := DeploymentFor(d)

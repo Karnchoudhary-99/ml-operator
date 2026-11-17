@@ -65,5 +65,7 @@
         "ml-operator/managed-by": "ml-operator"
       }
     }
-  ]
+  ],
+  "NodeSelector": null,
+  "Tolerations": null
 }
