@@ -427,6 +427,47 @@ func TestSpecsEqualPaused(t *testing.T) {
 	}
 }
 
+// TestSpecsEqualMaintenanceWindow pins the window comparison: a
+// changed window must bump the generation (this bit the feature
+// itself — a re-windowed manifest applied as "unchanged" and the
+// reconciler kept deferring under the old window), while
+// re-ordering the days or changing their case must not.
+func TestSpecsEqualMaintenanceWindow(t *testing.T) {
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Strategy: api.StrategyRolling,
+			MaintenanceWindow: &api.MaintenanceWindowSpec{
+				Days:  []string{"Mon", "Wed", "Fri"},
+				Start: "02:00",
+				End:   "04:00",
+			},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical windowed specs should be equal")
+	}
+	b.MaintenanceWindow = &api.MaintenanceWindowSpec{Days: []string{"Mon", "Wed", "Fri"}, Start: "02:00", End: "05:00"}
+	if SpecsEqual(a, b) {
+		t.Fatal("different end time should not be equal")
+	}
+	b.MaintenanceWindow = &api.MaintenanceWindowSpec{Days: []string{"Mon", "Tue"}, Start: "02:00", End: "04:00"}
+	if SpecsEqual(a, b) {
+		t.Fatal("different days should not be equal")
+	}
+	b.MaintenanceWindow = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("windowed vs windowless specs should not be equal")
+	}
+	b = base()
+	b.MaintenanceWindow.Days = []string{"fri", "Mon", "WED"}
+	if !SpecsEqual(a, b) {
+		t.Fatal("re-ordered / re-cased days are the same window and should be equal")
+	}
+}
+
 // TestRegisterPreservesStatus: re-registering a deployment with a
 // new spec (the apply path) must not wipe the stored status — a
 // parsed manifest carries a zero status, and overwriting would lose

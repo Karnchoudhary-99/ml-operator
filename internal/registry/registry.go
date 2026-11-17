@@ -2,6 +2,7 @@ package registry
 
 import (
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
@@ -241,6 +242,17 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.Paused != b.Paused {
 		return false
 	}
+	// The maintenance window is a spec change for the same
+	// reason: changing the days or hours must bump the
+	// generation, or `mlop apply` of a re-windowed manifest
+	// would call it unchanged and the reconciler would keep
+	// deferring (or applying) under the old window.
+	if (a.MaintenanceWindow == nil) != (b.MaintenanceWindow == nil) {
+		return false
+	}
+	if a.MaintenanceWindow != nil && !windowEqual(*a.MaintenanceWindow, *b.MaintenanceWindow) {
+		return false
+	}
 	if (a.Canary == nil) != (b.Canary == nil) {
 		return false
 	}
@@ -276,6 +288,29 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	}
 	for k, v := range a.Env {
 		if bv, ok := b.Env[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
+// windowEqual compares two maintenance windows by value. Days
+// compare as a set, case-insensitively: ["Mon", "Wed"] and
+// ["wed", "Mon"] are the same window, so re-ordering the days in
+// a manifest must not bump the generation.
+func windowEqual(a, b api.MaintenanceWindowSpec) bool {
+	if a.Start != b.Start || a.End != b.End || len(a.Days) != len(b.Days) {
+		return false
+	}
+	for _, d := range a.Days {
+		found := false
+		for _, e := range b.Days {
+			if strings.EqualFold(d, e) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}

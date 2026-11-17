@@ -24,26 +24,27 @@ type statusListView struct {
 
 // statusDetailView is the JSON form of `mlop status <name> --json`.
 type statusDetailView struct {
-	Name               string                `json:"name"`
-	Namespace          string                `json:"namespace"`
-	Generation         int64                 `json:"generation"`
-	ObservedGeneration int64                 `json:"observedGeneration"`
-	Phase              api.Phase             `json:"phase"`
-	Ready              int32                 `json:"ready"`
-	Desired            int32                 `json:"desired"`
-	Image              string                `json:"image"`
-	Framework          string                `json:"framework"`
-	Version            string                `json:"version"`
-	PreviousImage      string                `json:"previousImage,omitempty"`
-	PreviousVersion    string                `json:"previousVersion,omitempty"`
-	Strategy           api.RolloutStrategy   `json:"strategy"`
-	Paused             bool                  `json:"paused"`
-	Autoscaling        *api.AutoscalingSpec  `json:"autoscaling,omitempty"`
-	Availability       *api.AvailabilitySpec `json:"availability,omitempty"`
-	Security           *api.SecuritySpec     `json:"security,omitempty"`
-	Message            string                `json:"message"`
-	Conditions         []api.Condition       `json:"conditions,omitempty"`
-	Requeue            bool                  `json:"requeue"`
+	Name               string                     `json:"name"`
+	Namespace          string                     `json:"namespace"`
+	Generation         int64                      `json:"generation"`
+	ObservedGeneration int64                      `json:"observedGeneration"`
+	Phase              api.Phase                  `json:"phase"`
+	Ready              int32                      `json:"ready"`
+	Desired            int32                      `json:"desired"`
+	Image              string                     `json:"image"`
+	Framework          string                     `json:"framework"`
+	Version            string                     `json:"version"`
+	PreviousImage      string                     `json:"previousImage,omitempty"`
+	PreviousVersion    string                     `json:"previousVersion,omitempty"`
+	Strategy           api.RolloutStrategy        `json:"strategy"`
+	Paused             bool                       `json:"paused"`
+	MaintenanceWindow  *api.MaintenanceWindowSpec `json:"maintenanceWindow,omitempty"`
+	Autoscaling        *api.AutoscalingSpec       `json:"autoscaling,omitempty"`
+	Availability       *api.AvailabilitySpec      `json:"availability,omitempty"`
+	Security           *api.SecuritySpec          `json:"security,omitempty"`
+	Message            string                     `json:"message"`
+	Conditions         []api.Condition            `json:"conditions,omitempty"`
+	Requeue            bool                       `json:"requeue"`
 }
 
 // cmdStatus implements `mlop status [name] [--json]`: reconcile first (the
@@ -146,7 +147,8 @@ func cmdStatus(opts *options, args []string) int {
 			Phase: d.Status.Phase, Ready: d.Status.ReadyReplicas, Desired: desiredReplicas(d),
 			Image: d.Spec.Model.Image, Framework: d.Spec.Model.Framework, Version: d.Spec.Model.Version,
 			PreviousImage: d.Status.PreviousImage, PreviousVersion: d.Status.PreviousVersion,
-			Strategy: d.Spec.Strategy, Paused: d.Spec.Paused, Autoscaling: d.Spec.Autoscaling,
+			Strategy: d.Spec.Strategy, Paused: d.Spec.Paused, MaintenanceWindow: d.Spec.MaintenanceWindow,
+			Autoscaling:  d.Spec.Autoscaling,
 			Availability: d.Spec.Availability, Security: d.Spec.Security,
 			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
@@ -170,6 +172,19 @@ func cmdStatus(opts *options, args []string) int {
 	fmt.Fprintf(opts.stdout, "strategy:   %s\n", d.Spec.Strategy)
 	if d.Spec.Paused {
 		fmt.Fprintf(opts.stdout, "paused:     yes — reconciliation suspended (mlop resume %s)\n", d.Name)
+	}
+	if w := d.Spec.MaintenanceWindow; w != nil {
+		// The reconcile above already ran against the live clock,
+		// so this line agrees with the WindowBlocked condition
+		// printed below: open now, or closed with the next
+		// opening named.
+		if w.ActiveAt(time.Now()) {
+			fmt.Fprintf(opts.stdout, "window:     %s (open now)\n", w.Describe())
+		} else if next := w.NextOpening(time.Now()); !next.IsZero() {
+			fmt.Fprintf(opts.stdout, "window:     %s (closed — next opens %s)\n", w.Describe(), next.Format("Mon 15:04 UTC"))
+		} else {
+			fmt.Fprintf(opts.stdout, "window:     %s (closed)\n", w.Describe())
+		}
 	}
 	if d.Spec.Autoscaling != nil {
 		fmt.Fprintf(opts.stdout, "autoscaling: min %d, max %d, cpu %d%%, rps %d\n",
