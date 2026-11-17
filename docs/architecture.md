@@ -155,6 +155,16 @@ cluster every time, and applies only the difference:
    source has no defaults to fill in beyond the mount path
    and downloader image: an absent block is a real choice
    (weights in the image), so the render leaves it alone.
+
+   Pull secrets ride on the same render as well: the pod
+   template carries `spec.imagePullSecrets` (absent means pull
+   without credentials), inherited by canary and green
+   Deployments for the same reason — a rollout must not fail
+   to pull the new image for want of credentials — and the
+   diff reasons name a rotation, so drift and `mlop diff`
+   report a secret change instead of calling the Deployment
+   in sync. The list is copied, so a later spec mutation
+   cannot move an already-rendered Deployment.
 4½. **Maintenance window.** After the plan and before any
    cluster write, the gate checks `spec.maintenanceWindow`:
    when the window is closed and the reconcile would change

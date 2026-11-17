@@ -67,6 +67,13 @@ usual ones:
   characters, or a `mountPath` that is not an absolute path. The
   error names the field. A missing checksum is only a warning
   (`mlop validate` flags the unverified download), not an error.
+- **imagePullSecrets mistakes** — a secret name that is not a
+  DNS-1123 subdomain (uppercase, `_`, or empty), or the same
+  secret listed twice. The error names the entry. A deployment
+  that pulls a private image with no secret set fails at the
+  kubelet, not at apply time — `mlop status` shows the secrets
+  (or their absence) so an `ImagePullBackOff` has somewhere to
+  look first.
 
 ## `apply` fails and the deployment goes `Degraded` with `ApplyFailed`
 

@@ -45,6 +45,7 @@ with the desired state.
 - [x] Pod placement (`spec.placement`: nodeSelector + tolerations, so a GPU model lands on GPU nodes — `internal/api/placement_test.go`, `internal/render/render_test.go`)
 - [x] Traffic simulation (`mlop traffic`: error-rate + p95-latency observations feed the canary/blue-green health gate, cumulative across batches — `internal/controller/fake.go`, `cmd/mlop/traffic.go`)
 - [x] Model source (`spec.modelSource`: the pod downloads the model artifact from an http(s) URI into a shared volume at startup, checksum-verified when a sha256 is set — `internal/api/model_source_test.go`, `internal/render/model_source_test.go`)
+- [x] Image pull secrets (`spec.imagePullSecrets`: the Kubernetes secrets holding registry credentials for pulling the serving image — `internal/api/image_pull_secrets_test.go`, `internal/render/image_pull_secrets_test.go`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -706,6 +707,28 @@ https://…/iris-mlp.onnx -> /models/iris-mlp.onnx (sha256:
 9f2c4a1b8e77… verified)`), and `mlop diff` names a source change
 before it applies. `examples/model-source-tour.sh` walks the
 whole story end to end.
+
+### Image pull secrets
+
+`spec.imagePullSecrets` names the Kubernetes secrets holding
+registry credentials for pulling the serving image — the
+`docker-registry` secrets for a private registry:
+
+```yaml
+spec:
+  imagePullSecrets: regcred, ghcr-creds
+```
+
+The YAML dialect writes a comma-separated string; JSON manifests
+carry a real array. Empty means the pods pull without
+credentials: public images, or a registry that trusts the node's
+own credentials. The secrets render onto the pod template of the
+stable Deployment, and canary and green Deployments inherit them,
+so a rollout never fails to pull the new image for want of
+credentials. `mlop status <name>` shows them (`imagePullSecrets:
+regcred, ghcr-creds`), and `mlop diff` names a rotation before it
+applies. `examples/image-pull-secrets-tour.sh` walks the whole
+story end to end.
 
 ### Autoscaling
 
