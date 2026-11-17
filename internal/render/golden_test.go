@@ -136,3 +136,33 @@ func TestGoldenCanaryDeployment(t *testing.T) {
 func TestGoldenGreenDeployment(t *testing.T) {
 	checkGolden(t, "green.json", GreenDeploymentFor(canonicalDeployment()))
 }
+
+// sourcedCanonicalDeployment is the canonical deployment with
+// a model source: the same iris-mlp v1, 2 replicas, autoscaling
+// on and canary configured, but the weights come from an https
+// URL instead of the image.
+func sourcedCanonicalDeployment() api.ModelDeployment {
+	d := canonicalDeployment()
+	d.Spec.ModelSource = &api.ModelSourceSpec{
+		URI:    "https://artifacts.example.com/models/iris-mlp.onnx",
+		SHA256: "9f2c4a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807",
+	}
+	return d
+}
+
+// TestGoldenSourcedDeployment pins the rendered objects for a
+// sourced deployment: the init container, the shared volume
+// and the serving container's mount on the stable, canary and
+// green Deployments alike. Any accidental change to what the
+// operator would apply shows up here first.
+func TestGoldenSourcedDeployment(t *testing.T) {
+	checkGolden(t, "sourced-deployment.json", DeploymentFor(sourcedCanonicalDeployment()))
+}
+
+func TestGoldenSourcedCanaryDeployment(t *testing.T) {
+	checkGolden(t, "sourced-canary.json", CanaryDeploymentForWeight(sourcedCanonicalDeployment(), 10))
+}
+
+func TestGoldenSourcedGreenDeployment(t *testing.T) {
+	checkGolden(t, "sourced-green.json", GreenDeploymentFor(sourcedCanonicalDeployment()))
+}
