@@ -1,0 +1,26 @@
+# iris-mlp with autoscaling on (min 1, max 5, CPU target 70%): the
+# autoscaler owns the replica count, so `mlop scale` refuses this
+# deployment. Used by the scale tour for the refusal case.
+name: iris-autoscaled
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 2
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilization: 70
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
