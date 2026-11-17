@@ -56,9 +56,12 @@ source "$WORK/mlop.bash"
 complete -p mlop | grep -q "_mlop"
 expect "status" complete_words 1 mlop st
 expect "completion" complete_words 1 mlop comp
+expect "traffic" complete_words 1 mlop tr
 
 step "complete flags and the completion shells"
 expect "--json" complete_words 2 mlop status --
+expect "--requests" complete_words 2 mlop traffic --
+expect "--p95-ms" complete_words 2 mlop traffic --p
 expect "bash" complete_words 2 mlop completion ""
 
 step "no deployments yet: name completion is empty, not an error"
