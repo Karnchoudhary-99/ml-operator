@@ -106,6 +106,27 @@ deployment already serves it. A rollback is itself a rollout
 through the deployment's normal strategy — it does not edit
 history, so a second rollback returns to the version just left.
 
+## Scaling replicas
+
+```bash
+mlop scale iris-mlp --replicas 4   # generation bump, reconciles immediately
+mlop scale iris-mlp --replicas 4   # already at 4: no-op, no generation bump
+mlop scale iris-mlp --replicas 1 --dry-run   # prints the change, writes nothing
+mlop scale iris-mlp --replicas 0   # stops serving; status reports 0/0 replicas ready
+```
+
+A pure replica change needs no rollout: the Deployment is updated
+in place and the phase follows the new count. Two refusals keep
+the command honest. With autoscaling on, the autoscaler owns the
+count — the reconciler overwrites `spec.replicas` with the
+scaler's decision on every reconcile — so `mlop scale` refuses
+and points at `spec.autoscaling.minReplicas`/`maxReplicas`
+instead; a manual scale would otherwise be silently reverted on
+the next resync. And a paused deployment refuses a scale the same
+way it refuses a rollback: resume first, or the new generation
+would be swallowed. Every manual scale records a `Scaled` event
+in `mlop logs`, so the audit trail shows who changed the count.
+
 ## Pausing and resuming
 
 ```bash
@@ -502,12 +523,12 @@ state file than the one you applied to.
 
 ## End-to-end tours
 
-The ten scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The fourteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
-ready, canary or blue-green rollout, rollback, pause/resume,
+ready, canary or blue-green rollout, rollback, scale, pause/resume,
 backup/restore, batch apply, hardening, shell completion) and asserts the output at
 every step, so a tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all ten on
+(`examples/mlop-tour.sh`) or all of them; CI runs all fourteen on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`
