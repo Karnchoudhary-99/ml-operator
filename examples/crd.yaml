@@ -254,6 +254,24 @@ spec:
                             type: integer
                             description: Seconds the pod stays bound after the matching taint appears. Only meaningful with effect NoExecute; empty means evict immediately.
                             minimum: 0
+                modelSource:
+                  type: object
+                  description: 'Fetch the model artifact into the pod at startup: an init container downloads it from uri into a shared volume mounted at mountPath, instead of baking the weights into the serving image. Absent means the image already contains the model. Only http(s) URIs are supported — artifact stores that need credentials (s3://) are rejected by the operator, not the schema. A checksum, when set, must be 64 hex characters; an empty checksum means the download is unverified (the operator warns about it).'
+                  required:
+                    - uri
+                  properties:
+                    uri:
+                      type: string
+                      description: http(s) URL of the model artifact, e.g. "https://artifacts.example.com/models/iris-mlp.onnx". Required.
+                    sha256:
+                      type: string
+                      description: Expected SHA-256 hex digest of the downloaded artifact. Empty means the download is not verified.
+                    mountPath:
+                      type: string
+                      description: Where the shared volume mounts in both the init container and the serving container. Empty means the default ("/models"). Must be an absolute path.
+                    downloaderImage:
+                      type: string
+                      description: Init-container image that fetches the artifact. Empty means the default ("curlimages/curl:8.5.0").
                 env:
                   type: object
                   description: Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.

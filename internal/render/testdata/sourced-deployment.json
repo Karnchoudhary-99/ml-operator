@@ -1,0 +1,134 @@
+{
+  "Name": "iris-mlp",
+  "Namespace": "default",
+  "Replicas": 2,
+  "Labels": {
+    "app.kubernetes.io/name": "iris-mlp",
+    "ml-operator/canary": "false",
+    "ml-operator/green": "false",
+    "ml-operator/managed-by": "ml-operator",
+    "ml-operator/model": "iris-mlp",
+    "ml-operator/version": "v1"
+  },
+  "Selector": {
+    "app.kubernetes.io/name": "iris-mlp",
+    "ml-operator/canary": "false",
+    "ml-operator/green": "false",
+    "ml-operator/managed-by": "ml-operator"
+  },
+  "Canary": false,
+  "Green": false,
+  "Container": {
+    "Name": "model",
+    "Image": "registry.example.com/iris-mlp:v1",
+    "Port": 8080,
+    "Env": [
+      {
+        "Name": "BATCH_SIZE",
+        "Value": "32"
+      },
+      {
+        "Name": "MODEL_ARTIFACT_PATH",
+        "Value": "/models/iris-mlp.onnx"
+      },
+      {
+        "Name": "MODEL_PATH",
+        "Value": "/models/iris-mlp"
+      }
+    ],
+    "Command": null,
+    "VolumeMounts": [
+      {
+        "Name": "model-artifacts",
+        "MountPath": "/models"
+      }
+    ],
+    "CPURequest": "500m",
+    "CPULimit": "1",
+    "MemoryRequest": "512Mi",
+    "MemoryLimit": "1Gi",
+    "ReadinessProbe": {
+      "Path": "/healthz",
+      "InitialDelaySeconds": 5,
+      "PeriodSeconds": 10
+    },
+    "Security": {
+      "ReadOnlyRootFilesystem": true,
+      "AllowPrivilegeEscalation": false,
+      "DropCapabilities": [
+        "ALL"
+      ]
+    }
+  },
+  "AntiAffinity": true,
+  "PodSecurity": {
+    "RunAsNonRoot": true,
+    "RunAsUser": 10001,
+    "SeccompProfile": "RuntimeDefault"
+  },
+  "TopologySpread": [
+    {
+      "MaxSkew": 1,
+      "TopologyKey": "kubernetes.io/hostname",
+      "WhenUnsatisfiable": "ScheduleAnyway",
+      "LabelSelector": {
+        "app.kubernetes.io/name": "iris-mlp",
+        "ml-operator/managed-by": "ml-operator"
+      }
+    }
+  ],
+  "NodeSelector": null,
+  "Tolerations": null,
+  "InitContainers": [
+    {
+      "Name": "model-download",
+      "Image": "curlimages/curl:8.5.0",
+      "Port": 0,
+      "Env": [
+        {
+          "Name": "MODEL_SOURCE_URI",
+          "Value": "https://artifacts.example.com/models/iris-mlp.onnx"
+        },
+        {
+          "Name": "MODEL_ARTIFACT_PATH",
+          "Value": "/models/iris-mlp.onnx"
+        },
+        {
+          "Name": "MODEL_SOURCE_SHA256",
+          "Value": "9f2c4a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807"
+        }
+      ],
+      "Command": [
+        "sh",
+        "-c",
+        "set -eu; curl -fsSL \"$MODEL_SOURCE_URI\" -o \"$MODEL_ARTIFACT_PATH\"; echo \"$MODEL_SOURCE_SHA256  $MODEL_ARTIFACT_PATH\" | sha256sum -c -"
+      ],
+      "VolumeMounts": [
+        {
+          "Name": "model-artifacts",
+          "MountPath": "/models"
+        }
+      ],
+      "CPURequest": "",
+      "CPULimit": "",
+      "MemoryRequest": "",
+      "MemoryLimit": "",
+      "ReadinessProbe": {
+        "Path": "",
+        "InitialDelaySeconds": 0,
+        "PeriodSeconds": 0
+      },
+      "Security": {
+        "ReadOnlyRootFilesystem": false,
+        "AllowPrivilegeEscalation": false,
+        "DropCapabilities": null
+      }
+    }
+  ],
+  "Volumes": [
+    {
+      "Name": "model-artifacts",
+      "EmptyDir": true
+    }
+  ]
+}

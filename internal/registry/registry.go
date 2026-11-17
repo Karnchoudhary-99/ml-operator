@@ -294,6 +294,20 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.Placement != nil && !placementEqual(*a.Placement, *b.Placement) {
 		return false
 	}
+	// A model source is a spec change for the same reason:
+	// pointing the deployment at a different artifact must
+	// bump the generation, or `mlop apply` of a re-sourced
+	// manifest would call it unchanged and the reconciler
+	// would keep serving the old artifact. The source
+	// compares by value: it is a plain struct of strings,
+	// so a JSON round-trip through the state file still
+	// equals a freshly parsed manifest.
+	if (a.ModelSource == nil) != (b.ModelSource == nil) {
+		return false
+	}
+	if a.ModelSource != nil && *a.ModelSource != *b.ModelSource {
+		return false
+	}
 	if len(a.Env) != len(b.Env) {
 		return false
 	}

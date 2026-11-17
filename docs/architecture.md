@@ -137,6 +137,24 @@ cluster every time, and applies only the difference:
    Deployment in sync. Placement has no defaults to fill in: an
    absent block is a real choice (schedule anywhere), so the
    render copies the spec's placement as written.
+
+   The model source rides on the same render as well: with
+   `spec.modelSource` set, the pod template gains a
+   `model-download` init container (curl image, `sh -c` fetch
+   plus `sha256sum -c` when a checksum is configured) and a
+   shared emptyDir volume mounted into both the init container
+   and the serving container, which also gets
+   `MODEL_ARTIFACT_PATH` unless the author set it explicitly.
+   The URI, checksum and destination travel as environment
+   variables, so no value is interpolated into the shell
+   command. Canary and green Deployments inherit both for the
+   same reason — a rollout must not serve without its artifact
+   — and the diff reasons name an init-container, volume or
+   mount change, so drift and `mlop diff` report a source
+   change instead of calling the Deployment in sync. The
+   source has no defaults to fill in beyond the mount path
+   and downloader image: an absent block is a real choice
+   (weights in the image), so the render leaves it alone.
 4½. **Maintenance window.** After the plan and before any
    cluster write, the gate checks `spec.maintenanceWindow`:
    when the window is closed and the reconcile would change

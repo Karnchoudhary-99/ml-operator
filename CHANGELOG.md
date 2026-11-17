@@ -8,6 +8,22 @@ the first public version is cut.
 
 ### Added
 
+- Model source — `spec.modelSource` (uri, optional sha256,
+  mountPath, downloaderImage): the pod downloads the model
+  artifact from an http(s) URI into a shared emptyDir volume at
+  startup, instead of baking the weights into the serving image.
+  A `model-download` init container (curl image by default)
+  fetches the artifact and verifies it with `sha256sum -c` when a
+  checksum is set, so a bad download fails the pod instead of
+  serving silently; the serving container reads the artifact from
+  `MODEL_ARTIFACT_PATH` unless the manifest sets it explicitly.
+  Only http(s) URIs are supported (S3 and other credentialled
+  stores are rejected at apply time). The source renders onto the
+  stable, canary and green Deployments alike, `mlop validate`
+  warns about an unverified download or a `/` mount path, `mlop
+  status` shows the source and its verification state, `mlop
+  diff` names a source change, and `examples/model-source-tour.sh`
+  walks the whole story end to end.
 - Traffic simulation — `mlop traffic <name> [--canary | --green]
   --requests N [--errors E] [--p95-ms M]`, feeding serving-traffic
   observations into the cluster metrics so the canary and

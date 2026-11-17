@@ -45,6 +45,7 @@ func Lint(d *ModelDeployment) []string {
 	warns = append(warns, lintMaintenanceWindow(spec.MaintenanceWindow)...)
 	warns = append(warns, lintSecurity(spec)...)
 	warns = append(warns, lintPlacement(spec.Placement)...)
+	warns = append(warns, lintModelSource(spec.ModelSource)...)
 	if spec.Strategy == StrategyCanary && spec.Canary != nil {
 		if spec.Canary.Weight > 50 {
 			add("spec.canary.weight is %d%%: the first canary step sends most traffic to an unproven revision", spec.Canary.Weight)
@@ -150,6 +151,24 @@ func lintGate(g *GateSpec, path string) []string {
 			"%s.minReadyRatio is %g: the rollout can promote while some pods are still unready", path, g.MinReadyRatio)}
 	}
 	return nil
+}
+
+// lintModelSource warns about model-source choices that
+// leave the serving pod trusting the network. An unset
+// source block is clean: weights in the image is the default,
+// so only explicit choices warn.
+func lintModelSource(m *ModelSourceSpec) []string {
+	if m == nil {
+		return nil
+	}
+	var warns []string
+	if m.SHA256 == "" {
+		warns = append(warns, "spec.modelSource.sha256 is empty: the artifact is downloaded without checksum verification — a tampered or truncated download would serve silently")
+	}
+	if m.MountPath == "/" {
+		warns = append(warns, "spec.modelSource.mountPath is \"/\": the artifact volume mounts at the filesystem root, hiding everything else in the container")
+	}
+	return warns
 }
 
 // lintPlacement warns about placement choices that leave a

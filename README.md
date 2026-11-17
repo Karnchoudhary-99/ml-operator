@@ -44,6 +44,7 @@ with the desired state.
 - [x] Maintenance windows (`spec.maintenanceWindow`: weekly UTC window, reconciles that would change anything defer outside it — `internal/api/window.go`, `internal/controller/window_test.go`)
 - [x] Pod placement (`spec.placement`: nodeSelector + tolerations, so a GPU model lands on GPU nodes — `internal/api/placement_test.go`, `internal/render/render_test.go`)
 - [x] Traffic simulation (`mlop traffic`: error-rate + p95-latency observations feed the canary/blue-green health gate, cumulative across batches — `internal/controller/fake.go`, `cmd/mlop/traffic.go`)
+- [x] Model source (`spec.modelSource`: the pod downloads the model artifact from an http(s) URI into a shared volume at startup, checksum-verified when a sha256 is set — `internal/api/model_source_test.go`, `internal/render/model_source_test.go`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -671,6 +672,40 @@ accelerator=nvidia-tesla-t4, tolerations gpu=true:NoSchedule`),
 and `mlop diff` names a nodeSelector or tolerations change before
 it applies. `examples/placement-tour.sh` walks the whole story
 end to end.
+
+### Model source
+
+`spec.modelSource` fetches the model artifact into the pod at
+startup instead of baking the weights into the serving image: an
+init container downloads the artifact from an http(s) URI into a
+shared emptyDir volume mounted at `mountPath` (default `/models`),
+and the serving container reads it from there. The serving
+container also gets `MODEL_ARTIFACT_PATH` (the full artifact path)
+unless the manifest sets it explicitly:
+
+```yaml
+spec:
+  modelSource:
+    uri: https://artifacts.example.com/models/iris-mlp.onnx
+    sha256: 9f2c4a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807
+    mountPath: /models
+```
+
+When a `sha256` is set, the init container verifies the download
+before the serving container starts — a failed verification fails
+the init container, so the pod retries the download instead of
+serving a bad artifact. Without a checksum the download is
+unverified, and `mlop validate` warns about it. Only http(s) URIs
+are supported: artifact stores that need credentials (like S3)
+are rejected at apply time with an explanation, not left to fail
+the pod at startup. Model source is a property of the model, not
+of one revision: canary and green Deployments inherit the init
+container and the volume, so a rollout never serves without its
+artifact. `mlop status <name>` shows the source (`modelSource:
+https://…/iris-mlp.onnx -> /models/iris-mlp.onnx (sha256:
+9f2c4a1b8e77… verified)`), and `mlop diff` names a source change
+before it applies. `examples/model-source-tour.sh` walks the
+whole story end to end.
 
 ### Autoscaling
 

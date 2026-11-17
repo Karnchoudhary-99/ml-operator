@@ -41,6 +41,7 @@ func Validate(d *ModelDeployment) []error {
 	errs = append(errs, validateMaintenanceWindow(spec.MaintenanceWindow)...)
 	errs = append(errs, validateSecurity(spec)...)
 	errs = append(errs, validatePlacement(spec)...)
+	errs = append(errs, validateModelSource(spec)...)
 	errs = append(errs, validateEnv(spec.Env)...)
 	errs = append(errs, validateHealth(spec.Health)...)
 
@@ -286,6 +287,51 @@ func validatePlacement(spec ModelDeploymentSpec) []error {
 		errs = append(errs, validateToleration(p.Tolerations[i], fmt.Sprintf("spec.placement.tolerations[%d]", i))...)
 	}
 	return errs
+}
+
+// validateModelSource checks the model-source block. A nil
+// block is valid — weights in the image is a real choice, not
+// an omission. The checks are about what the init container
+// can actually do: it downloads over plain HTTP(S) with curl,
+// so the URI must be an http(s) URL (artifact stores that need
+// credentials, like s3://, cannot be fetched and are rejected
+// with an explanation rather than failing the pod at startup);
+// a checksum, when given, must be a full 64-hex SHA-256 or the
+// verification step could never pass; and the mount path must
+// be absolute or the volume mount is meaningless.
+func validateModelSource(spec ModelDeploymentSpec) []error {
+	m := spec.ModelSource
+	if m == nil {
+		return nil
+	}
+	var errs []error
+	uri := strings.TrimSpace(m.URI)
+	if uri == "" {
+		errs = append(errs, fmt.Errorf("spec.modelSource.uri must not be empty"))
+	} else if !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
+		errs = append(errs, fmt.Errorf("spec.modelSource.uri %q must be an http(s) URL (artifact stores that need credentials, like s3://, are not supported)", m.URI))
+	}
+	if m.SHA256 != "" && !isSHA256Hex(m.SHA256) {
+		errs = append(errs, fmt.Errorf("spec.modelSource.sha256 must be 64 hex characters, got %q", m.SHA256))
+	}
+	if m.MountPath != "" && !strings.HasPrefix(m.MountPath, "/") {
+		errs = append(errs, fmt.Errorf("spec.modelSource.mountPath %q must be an absolute path", m.MountPath))
+	}
+	return errs
+}
+
+// isSHA256Hex reports whether s is exactly 64 hexadecimal
+// characters — the length and alphabet of a SHA-256 digest.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // validateToleration checks one toleration against the

@@ -83,7 +83,7 @@ func mapDeployment(tree map[string]any, d *api.ModelDeployment) error {
 func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
-		"canary", "blueGreen", "autoscaling", "availability", "security", "placement", "env", "health",
+		"canary", "blueGreen", "autoscaling", "availability", "security", "placement", "modelSource", "env", "health",
 		"paused", "maintenanceWindow",
 	}, "spec"); err != nil {
 		return err
@@ -420,6 +420,43 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 			ps.Tolerations = tols
 		}
 		s.Placement = ps
+	}
+
+	// modelSource is a plain mapping of strings: uri (required),
+	// sha256, mountPath and downloaderImage. Unknown keys are
+	// rejected by checkKeys, so a typo (e.g. "url" for "uri")
+	// fails loudly at parse time instead of silently fetching
+	// nothing.
+	if raw, ok := spec["modelSource"]; ok {
+		a, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("spec.modelSource: must be a mapping")
+		}
+		if err := checkKeys(a, []string{"uri", "sha256", "mountPath", "downloaderImage"}, "spec.modelSource"); err != nil {
+			return err
+		}
+		ms := &api.ModelSourceSpec{}
+		if v, ok, err := strField(a, "uri", "spec.modelSource"); err != nil {
+			return err
+		} else if ok {
+			ms.URI = v
+		}
+		if v, ok, err := strField(a, "sha256", "spec.modelSource"); err != nil {
+			return err
+		} else if ok {
+			ms.SHA256 = v
+		}
+		if v, ok, err := strField(a, "mountPath", "spec.modelSource"); err != nil {
+			return err
+		} else if ok {
+			ms.MountPath = v
+		}
+		if v, ok, err := strField(a, "downloaderImage", "spec.modelSource"); err != nil {
+			return err
+		} else if ok {
+			ms.DownloaderImage = v
+		}
+		s.ModelSource = ms
 	}
 
 	if raw, ok := spec["env"]; ok {

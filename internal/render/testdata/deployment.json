@@ -32,6 +32,8 @@
         "Value": "/models/iris-mlp"
       }
     ],
+    "Command": null,
+    "VolumeMounts": null,
     "CPURequest": "500m",
     "CPULimit": "1",
     "MemoryRequest": "512Mi",
@@ -67,5 +69,7 @@
     }
   ],
   "NodeSelector": null,
-  "Tolerations": null
+  "Tolerations": null,
+  "InitContainers": null,
+  "Volumes": null
 }

@@ -51,12 +51,33 @@ type SecurityContext struct {
 	DropCapabilities         []string
 }
 
+// VolumeMount attaches one volume into a container at a
+// path. The model-source volume mounts the same emptyDir
+// into the init container (where the artifact is written)
+// and the serving container (where it is read).
+type VolumeMount struct {
+	Name      string
+	MountPath string
+}
+
+// Volume is one pod volume. Only emptyDir volumes exist in
+// this operator so far: the shared model-artifact volume has
+// no other kind to be.
+type Volume struct {
+	Name     string
+	EmptyDir bool
+}
+
 // Container is the model-serving container of a rendered Deployment.
 type Container struct {
-	Name           string
-	Image          string
-	Port           int32
-	Env            []EnvVar // sorted by name, so rendering is deterministic
+	Name    string
+	Image   string
+	Port    int32
+	Env     []EnvVar // sorted by name, so rendering is deterministic
+	Command []string // empty for the serving container (image default)
+	// VolumeMounts attaches shared volumes into the container;
+	// nil for a container with no volumes to mount.
+	VolumeMounts   []VolumeMount
 	CPURequest     string
 	CPULimit       string
 	MemoryRequest  string
@@ -107,6 +128,16 @@ type Deployment struct {
 	// Tolerations lists the node taints the pod template's
 	// pods tolerate; nil means the pods tolerate nothing.
 	Tolerations []api.Toleration
+	// InitContainers run to completion before any serving
+	// container starts. With a model source set, the single
+	// entry is the model-download container that fetches the
+	// artifact into the shared volume; without one, empty.
+	InitContainers []Container
+	// Volumes holds the pod volumes. With a model source set,
+	// the single entry is the shared emptyDir the init
+	// container writes and the serving container reads;
+	// without one, empty.
+	Volumes []Volume
 }
 
 // Service is the rendered ClusterIP Service fronting a model.
@@ -245,6 +276,15 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 			WhenUnsatisfiable: "ScheduleAnyway",
 			LabelSelector:     Selector(d),
 		}}
+	}
+	// A model source adds the download init container and the
+	// shared emptyDir volume: the init container writes the
+	// artifact, the serving container reads it. Canary and
+	// green Deployments derive from this one, so they inherit
+	// both — a rollout never serves without its artifact.
+	if d.Spec.ModelSource != nil {
+		dep.InitContainers = []Container{modelSourceInitContainer(d)}
+		dep.Volumes = []Volume{{Name: modelSourceVolumeName, EmptyDir: true}}
 	}
 	return dep
 }
@@ -502,6 +542,20 @@ func DeploymentDiffReasons(desired, live Deployment) []string {
 	if !tolerationsEqual(desired.Tolerations, live.Tolerations) {
 		reasons = append(reasons, "tolerations changed")
 	}
+	// A model source is rendered onto every Deployment too:
+	// a new, removed or changed source changes the init
+	// container, the shared volume and the serving
+	// container's mount, so the reconciler must re-apply
+	// and `mlop diff` must name it.
+	if !initContainersEqual(desired.InitContainers, live.InitContainers) {
+		reasons = append(reasons, "model download init container changed")
+	}
+	if !volumesEqual(desired.Volumes, live.Volumes) {
+		reasons = append(reasons, "model artifact volume changed")
+	}
+	if !volumeMountsEqual(desired.Container.VolumeMounts, live.Container.VolumeMounts) {
+		reasons = append(reasons, "model artifact mount changed")
+	}
 	return reasons
 }
 
@@ -527,11 +581,26 @@ func containerFor(d api.ModelDeployment) Container {
 		env = append(env, EnvVar{Name: k, Value: v})
 	}
 	sort.Slice(env, func(i, j int) bool { return env[i].Name < env[j].Name })
+	// A model source mounts the shared volume into the
+	// serving container and tells it where the artifact
+	// landed. The author's own MODEL_ARTIFACT_PATH wins when
+	// set: the operator must not silently override an
+	// explicit path.
+	var mounts []VolumeMount
+	if d.Spec.ModelSource != nil {
+		m := d.Spec.ModelSource
+		mounts = []VolumeMount{{Name: modelSourceVolumeName, MountPath: m.EffectiveMountPath()}}
+		if !envHas(env, "MODEL_ARTIFACT_PATH") {
+			env = append(env, EnvVar{Name: "MODEL_ARTIFACT_PATH", Value: m.ArtifactPath()})
+			sort.Slice(env, func(i, j int) bool { return env[i].Name < env[j].Name })
+		}
+	}
 	return Container{
 		Name:          "model",
 		Image:         d.Spec.Model.Image,
 		Port:          d.Spec.Port,
 		Env:           env,
+		VolumeMounts:  mounts,
 		CPURequest:    d.Spec.Resources.CPURequest,
 		CPULimit:      d.Spec.Resources.CPULimit,
 		MemoryRequest: d.Spec.Resources.MemoryRequest,
@@ -609,6 +678,107 @@ func placementOf(d api.ModelDeployment) api.PlacementSpec {
 		return api.PlacementSpec{}
 	}
 	return *d.Spec.Placement
+}
+
+// modelSourceVolumeName is the shared emptyDir volume the init
+// container writes the artifact into and the serving container
+// reads it from.
+const modelSourceVolumeName = "model-artifacts"
+
+// modelSourceInitContainer renders the download init container
+// for a sourced deployment: it fetches the artifact from the
+// source URI into the shared volume before the serving
+// container starts, so a pod never serves with a missing or
+// half-downloaded model. The URI, checksum and destination
+// travel as environment variables, so no value is ever
+// interpolated into the shell command.
+func modelSourceInitContainer(d api.ModelDeployment) Container {
+	m := d.Spec.ModelSource
+	env := []EnvVar{
+		{Name: "MODEL_SOURCE_URI", Value: m.URI},
+		{Name: "MODEL_ARTIFACT_PATH", Value: m.ArtifactPath()},
+	}
+	if m.SHA256 != "" {
+		env = append(env, EnvVar{Name: "MODEL_SOURCE_SHA256", Value: m.SHA256})
+	}
+	return Container{
+		Name:         "model-download",
+		Image:        m.EffectiveDownloaderImage(),
+		Command:      []string{"sh", "-c", modelSourceDownloadScript(m.SHA256 != "")},
+		Env:          env,
+		VolumeMounts: []VolumeMount{{Name: modelSourceVolumeName, MountPath: m.EffectiveMountPath()}},
+	}
+}
+
+// modelSourceDownloadScript is the init container's command:
+// fetch the artifact with curl (fail on HTTP errors, follow
+// redirects), then verify the checksum when one is configured
+// — a failed verification fails the init container, so the pod
+// restarts the download instead of serving a bad artifact.
+// Without a checksum the download is unverified by design
+// (Lint warns about it at apply time).
+func modelSourceDownloadScript(verified bool) string {
+	script := `set -eu; curl -fsSL "$MODEL_SOURCE_URI" -o "$MODEL_ARTIFACT_PATH"`
+	if verified {
+		script += `; echo "$MODEL_SOURCE_SHA256  $MODEL_ARTIFACT_PATH" | sha256sum -c -`
+	}
+	return script
+}
+
+// envHas reports whether an environment variable of the given
+// name is already set.
+func envHas(env []EnvVar, name string) bool {
+	for _, e := range env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// initContainersEqual compares init containers by the fields
+// the operator renders: name, image, command, env and volume
+// mounts. A change in any of them means the pod's startup
+// behaviour changed.
+func initContainersEqual(a, b []Container) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].Image != b[i].Image ||
+			!stringSliceEqual(a[i].Command, b[i].Command) ||
+			!envEqual(a[i].Env, b[i].Env) ||
+			!volumeMountsEqual(a[i].VolumeMounts, b[i].VolumeMounts) {
+			return false
+		}
+	}
+	return true
+}
+
+// volumesEqual compares pod volumes by name and kind.
+func volumesEqual(a, b []Volume) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// volumeMountsEqual compares volume mounts by name and path.
+func volumeMountsEqual(a, b []VolumeMount) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // copyStringMap copies a label map, or nil when the input is nil,

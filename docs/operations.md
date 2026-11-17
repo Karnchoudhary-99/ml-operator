@@ -406,6 +406,27 @@ Exists toleration with an empty key tolerates every taint, and a
 the taint appears. `examples/placement-tour.sh` drives all of it
 end to end.
 
+## Model source
+
+`spec.modelSource` fetches the model artifact into the pod at
+startup instead of baking the weights into the image: an init
+container (`model-download`, `curlimages/curl:8.5.0` by default)
+downloads the artifact from an http(s) URI into a shared emptyDir
+volume mounted at `mountPath` (default `/models`), and the
+serving container reads it from `MODEL_ARTIFACT_PATH` (the full
+artifact path, unless the manifest sets that variable
+explicitly). With a `sha256` set, the init container verifies the
+download with `sha256sum -c` before the serving container starts:
+a bad artifact fails the pod instead of serving silently. The URI,
+checksum and destination travel as environment variables on the
+init container, so no value is ever interpolated into its shell
+command. Only http(s) is supported — S3 and other credentialled
+stores are rejected at apply time. The source renders onto the
+stable, canary and green Deployments alike, `mlop diff` names a
+source change, and `mlop validate` warns about an unverified
+download or a mount path of `/`. `examples/model-source-tour.sh`
+drives all of it end to end.
+
 ## Backing up and restoring state
 
 Everything the operator knows lives in the one state file, so a
@@ -634,13 +655,14 @@ state file than the one you applied to.
 
 ## End-to-end tours
 
-The seventeen scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The eighteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
 ready, canary or blue-green rollout, rollback, scale, pause/resume,
 backup/restore, batch apply, hardening, shell completion,
-maintenance windows, pod placement, traffic simulation) and asserts the output at
+maintenance windows, pod placement, traffic simulation, model
+source) and asserts the output at
 every step, so a tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all seventeen on
+(`examples/mlop-tour.sh`) or all of them; CI runs all eighteen on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`

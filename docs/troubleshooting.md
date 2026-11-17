@@ -60,6 +60,13 @@ usual ones:
   without effect `NoExecute`, or a `nodeSelector` key that is not
   a valid label key (letters, digits, `-`, `_`, `.`, with an
   optional DNS prefix before `/`). The error names the field.
+- **modelSource mistakes** — an `s3://` (or other non-http(s))
+  URI (only http(s) downloads are supported — the init container
+  is curl, and credentialled stores are rejected at apply time,
+  not left to fail the pod), a `sha256` that is not 64 hex
+  characters, or a `mountPath` that is not an absolute path. The
+  error names the field. A missing checksum is only a warning
+  (`mlop validate` flags the unverified download), not an error.
 
 ## `apply` fails and the deployment goes `Degraded` with `ApplyFailed`
 
