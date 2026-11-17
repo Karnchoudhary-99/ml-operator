@@ -561,7 +561,8 @@ blocked — an in-sync deployment outside its window still reports
 `Available`. `mlop status` shows the window and whether it is
 open now, and `mlop validate` warns when a window is under 30
 minutes (a canary step plus its health gate may not fit inside
-it). Two deliberate exceptions: `mlop repair` still applies
+it). `mlop diff` shows the pending plan while a change waits,
+with a note that it applies when the window opens. Two deliberate exceptions: `mlop repair` still applies
 immediately (repair is a human decision, not an automatic
 change), and removing the window from the manifest is the
 emergency override — apply without `maintenanceWindow` and the

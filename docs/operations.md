@@ -558,12 +558,13 @@ state file than the one you applied to.
 
 ## End-to-end tours
 
-The fourteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
+The fifteen scripts in `examples/*-tour.sh` are the CLI's end-to-end
 smoke tests: each one drives a whole story through `mlop` (apply,
 ready, canary or blue-green rollout, rollback, scale, pause/resume,
-backup/restore, batch apply, hardening, shell completion) and asserts the output at
+backup/restore, batch apply, hardening, shell completion,
+maintenance windows) and asserts the output at
 every step, so a tour is a demo and a test in one. Run one directly
-(`examples/mlop-tour.sh`) or all of them; CI runs all fourteen on
+(`examples/mlop-tour.sh`) or all of them; CI runs all fifteen on
 every push and PR.
 
 All tours share `examples/tour-lib.sh`, which provides `expect`

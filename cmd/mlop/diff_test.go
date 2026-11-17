@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDiffNameAndManifest(t *testing.T) {
@@ -124,5 +125,43 @@ func TestDiffErrors(t *testing.T) {
 	bad := writeManifest(t, "name: bad\nspec:\n  model:\n    image: \"\"\n")
 	if code, _, _ := runCLIState(t, state, "diff", "-f", bad); code == 0 {
 		t.Fatalf("diff of an invalid manifest should fail")
+	}
+}
+
+// TestDiffMaintenanceWindow pins the window note: while the window
+// is closed the plan is still shown (it is what applies when the
+// window opens), but diff says so instead of letting the plan look
+// imminent, and --json reports windowClosed.
+func TestDiffMaintenanceWindow(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("Mon")
+	// Create v1 with no window, so the cluster holds it; then roll
+	// to v2 under a window that opens only tomorrow.
+	manifest := writeManifest(t, irisV1)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifest); code != 0 {
+		t.Fatalf("apply exit %d", code)
+	}
+	windowed := strings.Replace(irisV1, "  replicas: 2\n",
+		"  replicas: 2\n  maintenanceWindow:\n    days: "+tomorrow+"\n    start: 02:00\n    end: 04:00\n", 1)
+	v2 := strings.Replace(strings.Replace(windowed, "iris-mlp:v1", "iris-mlp:v2", 1), "version: v1", "version: v2", 1)
+	manifestV2 := writeManifest(t, v2)
+	if code, _, _ := runCLIState(t, state, "apply", "-f", manifestV2); code != 0 {
+		t.Fatalf("apply v2 exit %d", code)
+	}
+	code, out, _ := runCLIState(t, state, "diff", "iris-mlp")
+	if code != 0 || !strings.Contains(out, "outside its maintenance window") ||
+		!strings.Contains(out, "UpdateDeployment default/iris-mlp") {
+		t.Fatalf("diff exit %d, out %q", code, out)
+	}
+	code, out, _ = runCLIState(t, state, "diff", "iris-mlp", "--json")
+	if code != 0 {
+		t.Fatalf("diff --json exit %d, out %q", code, out)
+	}
+	var view diffView
+	if err := json.Unmarshal([]byte(out), &view); err != nil {
+		t.Fatalf("diff --json is not valid JSON: %v (%q)", err, out)
+	}
+	if !view.WindowClosed || view.InSync {
+		t.Fatalf("diff --json = %+v, want windowClosed true and inSync false", view)
 	}
 }
