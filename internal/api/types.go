@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,6 +116,21 @@ type ModelDeploymentSpec struct {
 	// placement is a real choice (schedule anywhere), not an
 	// omission, so ApplyDefaults leaves it alone.
 	Placement *PlacementSpec
+	// ModelSource fetches the model artifact into the pod at
+	// startup, instead of baking the weights into the serving
+	// image: an init container downloads the artifact from
+	// URI into a shared emptyDir volume mounted at MountPath,
+	// and the serving container finds the weights on disk.
+	// Nil means the image already contains the model (the
+	// original behaviour) and no init container is rendered.
+	// ModelSource is a property of the model, not of one
+	// revision: canary and green Deployments inherit it, so a
+	// rollout never silently serves a stale or missing
+	// artifact. It has no operator defaults to fill in
+	// beyond the mount path and downloader image: an absent
+	// source is a real choice (weights in the image), not an
+	// omission, so ApplyDefaults leaves it alone.
+	ModelSource *ModelSourceSpec
 	// Paused suspends reconciliation for this deployment: while
 	// true the operator makes no cluster changes, advances no
 	// rollout, and applies no autoscaling decision — the live
@@ -413,6 +429,127 @@ type PlacementSpec struct {
 	// Empty means the pod tolerates nothing: a tainted node
 	// rejects it.
 	Tolerations []Toleration
+}
+
+// DefaultModelMountPath is where the artifact lands when
+// MountPath is unset: a plain, conventional directory the
+// serving container can rely on.
+const DefaultModelMountPath = "/models"
+
+// DefaultDownloaderImage is the init-container image that
+// fetches the artifact. It is deliberately tiny and single
+// purpose (curl + sha256sum): the downloader runs before the
+// model server starts, so it never shares a process with
+// serving traffic.
+const DefaultDownloaderImage = "curlimages/curl:8.5.0"
+
+// ModelSourceSpec describes one model artifact to download
+// into the pod at startup. The init container fetches URI
+// into a shared emptyDir volume mounted at MountPath, and
+// the serving container reads the artifact from
+// ArtifactPath (mount path + the file name from the URI).
+// Only http(s) URIs are supported: artifact stores that need
+// credentials (S3, GCS) are future work, and the operator
+// says so instead of silently failing the download.
+type ModelSourceSpec struct {
+	// URI is the http(s) URL of the model artifact, e.g.
+	// "https://artifacts.example.com/models/iris-mlp.onnx".
+	// Required when the block is present.
+	URI string
+	// SHA256 is the expected hex digest of the downloaded
+	// artifact. Empty means the download is not verified —
+	// Lint warns about it, because an unverified artifact
+	// is whatever the network handed the pod.
+	SHA256 string
+	// MountPath is where the shared volume mounts in both
+	// the init container and the serving container. Empty
+	// means DefaultModelMountPath ("/models").
+	MountPath string
+	// DownloaderImage is the init-container image. Empty
+	// means DefaultDownloaderImage ("curlimages/curl:8.5.0").
+	DownloaderImage string
+}
+
+// EffectiveMountPath returns the mount path the operator
+// renders, resolving the "/models" default for an empty one.
+func (m *ModelSourceSpec) EffectiveMountPath() string {
+	if m == nil || m.MountPath == "" {
+		return DefaultModelMountPath
+	}
+	return m.MountPath
+}
+
+// EffectiveDownloaderImage returns the init-container image
+// the operator renders, resolving the curl default for an
+// empty one.
+func (m *ModelSourceSpec) EffectiveDownloaderImage() string {
+	if m == nil || m.DownloaderImage == "" {
+		return DefaultDownloaderImage
+	}
+	return m.DownloaderImage
+}
+
+// ArtifactFileName is the file name the artifact lands under:
+// the last path segment of the URI, or "model.bin" when the
+// URI ends in a slash or has no usable segment. Query strings
+// and fragments are stripped first, so a signed URL still
+// yields a clean file name.
+func (m *ModelSourceSpec) ArtifactFileName() string {
+	if m == nil {
+		return "model.bin"
+	}
+	u := m.URI
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u = u[:i]
+	}
+	// The file name comes from the path only: strip the scheme
+	// and host first, so a bare host ("https://artifacts.example.com")
+	// is not mistaken for a file name.
+	if i := strings.Index(u, "://"); i >= 0 {
+		rest := u[i+3:]
+		if j := strings.Index(rest, "/"); j >= 0 {
+			u = rest[j:]
+		} else {
+			return "model.bin"
+		}
+	}
+	// A URI ending in a slash names a directory, not a file:
+	// there is no file name to take from it.
+	if strings.HasSuffix(u, "/") || u == "" {
+		return "model.bin"
+	}
+	name := u
+	if i := strings.LastIndex(u, "/"); i >= 0 {
+		name = u[i+1:]
+	}
+	if name == "" {
+		return "model.bin"
+	}
+	return name
+}
+
+// ArtifactPath is the full path the serving container reads
+// the artifact from: mount path + file name.
+func (m *ModelSourceSpec) ArtifactPath() string {
+	if m == nil {
+		return ""
+	}
+	return strings.TrimSuffix(m.EffectiveMountPath(), "/") + "/" + m.ArtifactFileName()
+}
+
+// Describe renders the model source as one line for
+// `mlop status`, e.g.
+// "https://artifacts.example.com/models/iris-mlp.onnx -> /models/iris-mlp.onnx (sha256: 9f2c… verified)".
+// A nil source describes as "" (the caller omits the line).
+func (m *ModelSourceSpec) Describe() string {
+	if m == nil {
+		return ""
+	}
+	verified := "unverified"
+	if m.SHA256 != "" {
+		verified = "sha256: " + m.SHA256[:12] + "… verified"
+	}
+	return fmt.Sprintf("%s -> %s (%s)", m.URI, m.ArtifactPath(), verified)
 }
 
 // Toleration mirrors the Kubernetes corev1.Toleration, trimmed
