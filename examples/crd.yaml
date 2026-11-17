@@ -215,6 +215,45 @@ spec:
                     seccompProfile:
                       type: string
                       description: 'Seccomp profile for the pod: "RuntimeDefault", "Unconfined", or "Localhost/<profile>". Empty means the default ("RuntimeDefault").'
+                placement:
+                  type: object
+                  description: 'Pin the model''s pods to nodes: which nodes they may run on (nodeSelector) and which node taints they tolerate (tolerations). Absent means unconstrained: the scheduler places the pods anywhere. Cross-field rules the schema cannot express (nodeSelector keys must be label keys, a value is only legal with operator Equal, tolerationSeconds only with effect NoExecute) are enforced by the operator, not the schema.'
+                  properties:
+                    nodeSelector:
+                      type: object
+                      description: 'Node labels the pod''s node must carry, e.g. {"accelerator": "nvidia-tesla-t4"}. Keys must be valid label keys, values valid label values.'
+                      additionalProperties:
+                        type: string
+                    tolerations:
+                      type: array
+                      description: 'Node taints the pods tolerate. Empty means the pods tolerate nothing: a tainted node rejects them.'
+                      items:
+                        type: object
+                        description: 'One toleration: a taint key to tolerate, how to match it, and for which effect.'
+                        properties:
+                          key:
+                            type: string
+                            description: Taint key to tolerate. Empty is only legal with operator Exists, where it matches every taint.
+                          operator:
+                            type: string
+                            description: 'How to match the taint: "Equal" (key and value must both match) or "Exists" (the key alone must exist; value must be empty). Empty means "Equal".'
+                            enum:
+                              - Equal
+                              - Exists
+                          value:
+                            type: string
+                            description: Taint value to tolerate. Must be empty when operator is Exists.
+                          effect:
+                            type: string
+                            description: 'Taint effect to tolerate: "NoSchedule", "PreferNoSchedule", "NoExecute", or empty (any effect).'
+                            enum:
+                              - NoSchedule
+                              - PreferNoSchedule
+                              - NoExecute
+                          tolerationSeconds:
+                            type: integer
+                            description: Seconds the pod stays bound after the matching taint appears. Only meaningful with effect NoExecute; empty means evict immediately.
+                            minimum: 0
                 env:
                   type: object
                   description: Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.
