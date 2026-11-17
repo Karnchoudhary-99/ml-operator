@@ -40,6 +40,7 @@ func Validate(d *ModelDeployment) []error {
 	errs = append(errs, validateAvailability(spec)...)
 	errs = append(errs, validateMaintenanceWindow(spec.MaintenanceWindow)...)
 	errs = append(errs, validateSecurity(spec)...)
+	errs = append(errs, validatePlacement(spec)...)
 	errs = append(errs, validateEnv(spec.Env)...)
 	errs = append(errs, validateHealth(spec.Health)...)
 
@@ -259,6 +260,112 @@ func validateSecurity(spec ModelDeploymentSpec) []error {
 }
 
 var capabilityRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// validatePlacement checks the placement block. A nil block is
+// valid — unconstrained scheduling is a real choice, not an
+// omission. The checks are about Kubernetes rules, not taste:
+// a nodeSelector key that is not a label key would be rejected
+// by the API server at apply time; a toleration with a value
+// under operator Exists, or seconds without NoExecute, is
+// likewise not a toleration the kubelet understands.
+func validatePlacement(spec ModelDeploymentSpec) []error {
+	p := spec.Placement
+	if p == nil {
+		return nil
+	}
+	var errs []error
+	for k, v := range p.NodeSelector {
+		if !isLabelKey(k) {
+			errs = append(errs, fmt.Errorf("spec.placement.nodeSelector key %q is not a valid label key (optional DNS prefix + '/' + name of letters, digits, '-', '_', '.')", k))
+		}
+		if !isLabelValue(v) {
+			errs = append(errs, fmt.Errorf("spec.placement.nodeSelector[%q] value %q is not a valid label value (at most 63 characters of letters, digits, '-', '_', '.')", k, v))
+		}
+	}
+	for i := range p.Tolerations {
+		errs = append(errs, validateToleration(p.Tolerations[i], fmt.Sprintf("spec.placement.tolerations[%d]", i))...)
+	}
+	return errs
+}
+
+// validateToleration checks one toleration against the
+// Kubernetes rules: operator Equal or Exists (empty means
+// Equal), a value only under Equal, an effect from the known
+// set (empty means any), and tolerationSeconds only with
+// NoExecute. An empty key is legal only with Exists — it
+// matches every taint — which is broad enough that Lint warns
+// about it, but it is still a valid toleration.
+func validateToleration(t Toleration, path string) []error {
+	var errs []error
+	op := t.Operator
+	if op == "" {
+		op = "Equal"
+	}
+	if op != "Equal" && op != "Exists" {
+		errs = append(errs, fmt.Errorf("%s.operator %q must be \"Equal\" or \"Exists\"", path, t.Operator))
+	}
+	if op == "Exists" {
+		if t.Value != "" {
+			errs = append(errs, fmt.Errorf("%s.value must be empty when operator is \"Exists\" (an Exists toleration matches on the key alone)", path))
+		}
+		if t.Key != "" && !isLabelKey(t.Key) {
+			errs = append(errs, fmt.Errorf("%s.key %q is not a valid label key (optional DNS prefix + '/' + name of letters, digits, '-', '_', '.')", path, t.Key))
+		}
+	} else {
+		if t.Key == "" {
+			errs = append(errs, fmt.Errorf("%s.key must not be empty when operator is \"Equal\" (use operator \"Exists\" to match every taint)", path))
+		} else if !isLabelKey(t.Key) {
+			errs = append(errs, fmt.Errorf("%s.key %q is not a valid label key (optional DNS prefix + '/' + name of letters, digits, '-', '_', '.')", path, t.Key))
+		}
+		if !isLabelValue(t.Value) {
+			errs = append(errs, fmt.Errorf("%s.value %q is not a valid label value (at most 63 characters of letters, digits, '-', '_', '.')", path, t.Value))
+		}
+	}
+	switch t.Effect {
+	case "", "NoSchedule", "PreferNoSchedule", "NoExecute":
+	default:
+		errs = append(errs, fmt.Errorf("%s.effect %q must be \"NoSchedule\", \"PreferNoSchedule\", \"NoExecute\", or empty (any effect)", path, t.Effect))
+	}
+	if t.TolerationSeconds != nil {
+		if t.Effect != "NoExecute" {
+			errs = append(errs, fmt.Errorf("%s.tolerationSeconds is only meaningful with effect \"NoExecute\" (got %q)", path, t.Effect))
+		}
+		if *t.TolerationSeconds < 0 {
+			errs = append(errs, fmt.Errorf("%s.tolerationSeconds must be >= 0, got %d", path, *t.TolerationSeconds))
+		}
+	}
+	return errs
+}
+
+// isLabelKey reports whether s is a valid Kubernetes label key:
+// an optional DNS-1123 subdomain prefix, a "/", and a name of
+// at most 63 characters (letters, digits, '-', '_', '.'), or a
+// bare name with no prefix.
+func isLabelKey(s string) bool {
+	name := s
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		if !isDNS1123Subdomain(s[:i]) {
+			return false
+		}
+		name = s[i+1:]
+	}
+	return labelNameRe.MatchString(name)
+}
+
+// isLabelValue reports whether s is a valid Kubernetes label
+// value: empty, or at most 63 characters starting and ending
+// with a letter or digit.
+func isLabelValue(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) > 63 {
+		return false
+	}
+	return labelNameRe.MatchString(s)
+}
+
+var labelNameRe = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
 
 func validateEnv(env map[string]string) []error {
 	var errs []error

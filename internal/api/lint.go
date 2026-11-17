@@ -44,6 +44,7 @@ func Lint(d *ModelDeployment) []string {
 	warns = append(warns, lintAvailability(spec)...)
 	warns = append(warns, lintMaintenanceWindow(spec.MaintenanceWindow)...)
 	warns = append(warns, lintSecurity(spec)...)
+	warns = append(warns, lintPlacement(spec.Placement)...)
 	if spec.Strategy == StrategyCanary && spec.Canary != nil {
 		if spec.Canary.Weight > 50 {
 			add("spec.canary.weight is %d%%: the first canary step sends most traffic to an unproven revision", spec.Canary.Weight)
@@ -149,6 +150,31 @@ func lintGate(g *GateSpec, path string) []string {
 			"%s.minReadyRatio is %g: the rollout can promote while some pods are still unready", path, g.MinReadyRatio)}
 	}
 	return nil
+}
+
+// lintPlacement warns about placement choices that leave a
+// model unscheduled or evicted by surprise. An unset placement
+// block is clean: unconstrained scheduling is the default, so
+// only explicit choices warn.
+func lintPlacement(p *PlacementSpec) []string {
+	if p == nil {
+		return nil
+	}
+	var warns []string
+	for _, t := range p.Tolerations {
+		op := t.Operator
+		if op == "" {
+			op = "Equal"
+		}
+		if op == "Exists" && t.Key == "" {
+			warns = append(warns, "spec.placement.tolerations has an Exists toleration with an empty key: the pod tolerates every taint on every node, so node taints stop protecting other workloads from it")
+		}
+		if t.Effect == "NoExecute" && t.TolerationSeconds == nil {
+			warns = append(warns, fmt.Sprintf(
+				"spec.placement.tolerations %q has effect NoExecute with no tolerationSeconds: the pod is evicted immediately when the taint appears, with no grace period", t.String()))
+		}
+	}
+	return warns
 }
 
 // lintSecurity warns about security choices that give the model
