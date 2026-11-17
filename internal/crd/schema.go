@@ -231,6 +231,13 @@ func SpecSchema() *schema {
 				),
 			)),
 		)),
+		prop("modelSource", objSchema("Fetch the model artifact into the pod at startup: an init container downloads it from uri into a shared volume mounted at mountPath, instead of baking the weights into the serving image. Absent means the image already contains the model. Only http(s) URIs are supported — artifact stores that need credentials (s3://) are rejected by the operator, not the schema. A checksum, when set, must be 64 hex characters; an empty checksum means the download is unverified (the operator warns about it).",
+			[]string{"uri"},
+			prop("uri", strSchema("http(s) URL of the model artifact, e.g. \"https://artifacts.example.com/models/iris-mlp.onnx\". Required.")),
+			prop("sha256", strSchema("Expected SHA-256 hex digest of the downloaded artifact. Empty means the download is not verified.")),
+			prop("mountPath", strSchema("Where the shared volume mounts in both the init container and the serving container. Empty means the default (\"/models\"). Must be an absolute path.")),
+			prop("downloaderImage", strSchema("Init-container image that fetches the artifact. Empty means the default (\"curlimages/curl:8.5.0\").")),
+		)),
 		prop("env", &schema{
 			typ:                  "object",
 			description:          "Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.",
