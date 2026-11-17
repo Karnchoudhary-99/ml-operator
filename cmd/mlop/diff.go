@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
 	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
@@ -18,12 +19,16 @@ import (
 // and the actions Reconcile would execute (a lone NoOp when in sync).
 // Paused reports whether the deployment is paused: the plan is what
 // Reconcile would do on resume, nothing applies while paused.
+// WindowClosed reports whether the maintenance window is closed
+// right now: the plan is what Reconcile would do when the window
+// opens, nothing applies until then.
 type diffView struct {
-	Deployment string              `json:"deployment"`
-	Generation int64               `json:"generation"`
-	InSync     bool                `json:"inSync"`
-	Paused     bool                `json:"paused"`
-	Actions    []controller.Action `json:"actions"`
+	Deployment   string              `json:"deployment"`
+	Generation   int64               `json:"generation"`
+	InSync       bool                `json:"inSync"`
+	Paused       bool                `json:"paused"`
+	WindowClosed bool                `json:"windowClosed"`
+	Actions      []controller.Action `json:"actions"`
 }
 
 // cmdDiff implements `mlop diff <name>` and `mlop diff -f
@@ -109,10 +114,13 @@ func cmdDiff(opts *options, args []string) int {
 	// The plan is computed from the registered spec, so it shows
 	// what Reconcile would do on resume even while paused — the
 	// note below says so, instead of letting the plan look like
-	// an imminent apply.
+	// an imminent apply. The same holds for a closed maintenance
+	// window: the plan is what applies when the window opens.
 	paused := rt.Registry.Get(key).Deployment.Spec.Paused
+	w := rt.Registry.Get(key).Deployment.Spec.MaintenanceWindow
+	windowClosed := w != nil && !w.ActiveAt(time.Now())
 	view := diffView{Deployment: key, Generation: generation, Actions: actions,
-		InSync: len(actions) == 1 && actions[0].Kind == controller.ActionNoOp, Paused: paused}
+		InSync: len(actions) == 1 && actions[0].Kind == controller.ActionNoOp, Paused: paused, WindowClosed: windowClosed}
 	if *jsonOut {
 		enc := json.NewEncoder(opts.stdout)
 		enc.SetIndent("", "  ")
@@ -124,6 +132,14 @@ func cmdDiff(opts *options, args []string) int {
 	}
 	if paused {
 		fmt.Fprintf(opts.stdout, "note: %s is paused — this plan applies on resume, nothing changes now\n", key)
+	}
+	if windowClosed {
+		next := w.NextOpening(time.Now())
+		nextStr := "unknown"
+		if !next.IsZero() {
+			nextStr = next.Format("Mon 15:04 UTC")
+		}
+		fmt.Fprintf(opts.stdout, "note: %s is outside its maintenance window (%s) — this plan applies when the window opens (%s), nothing changes now\n", key, w.Describe(), nextStr)
 	}
 	if view.InSync {
 		fmt.Fprintf(opts.stdout, "in sync: %s (generation %d) — %s\n", key, generation, actions[0].Reason)

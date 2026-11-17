@@ -217,6 +217,12 @@ func SpecSchema() *schema {
 			prop("periodSeconds", intSchema("Probe interval, in seconds.", intPtr(0), nil)),
 		)),
 		prop("paused", boolSchema("Suspend reconciliation while true: the operator makes no cluster changes, advances no rollout, and applies no autoscaling decision. Live objects keep serving as they are; resume by setting false. Default false.")),
+		prop("maintenanceWindow", objSchema("Recurring weekly window, in UTC, during which the operator may change cluster objects for this deployment. Outside the window a reconcile that would change anything defers until the window opens; a reconcile with nothing to do still runs. Absent means unrestricted. Cross-field rules the schema cannot express (days must be weekday abbreviations, times \"HH:MM\", start != end) are enforced by the operator, not the schema.",
+			nil,
+			prop("days", arrSchema("Weekdays the window opens on, as three-letter abbreviations. Empty means every day.", &schema{typ: "string", enum: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}})),
+			prop("start", strSchema("Opening time, \"HH:MM\" in 24-hour UTC (e.g. \"02:00\").")),
+			prop("end", strSchema("Closing time, \"HH:MM\" in 24-hour UTC. Earlier than start means the window runs overnight, past midnight into the next day.")),
+		)),
 	)
 }
 

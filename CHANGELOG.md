@@ -8,6 +8,18 @@ the first public version is cut.
 
 ### Added
 
+- Maintenance windows — `spec.maintenanceWindow` (weekly UTC
+  schedule: days as three-letter abbreviations, `start`/`end`
+  as `"HH:MM"`, overnight windows allowed), deferring every
+  reconcile that would change the cluster while the window is
+  closed — no applies, no rollout step, no promotion — with a
+  `WindowBlocked` condition naming the next opening and the
+  phase preserved. An in-sync deployment is not blocked, a
+  canary resumes from its step when the window opens, and
+  `mlop repair` still applies immediately as an explicit human
+  action. `mlop status` shows the window and whether it is open
+  now, the CRD carries the new field, and
+  `examples/window-tour.sh` walks the whole story end to end.
 - Manual replica scaling — `mlop scale <name> --replicas N
   [--dry-run]`, a spec change that bumps the generation and
   reconciles immediately with no rollout. Scaling to the current

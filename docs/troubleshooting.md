@@ -117,6 +117,25 @@ burning failure budget) or the step interval has not elapsed yet
 - **\"--replicas N is required\"** — the flag is mandatory; a
   negative value is rejected the same way.
 
+## Deployment waits for its maintenance window
+
+`mlop status <name>` says `waiting for maintenance window —
+next opens Tue 02:00 UTC` with a `WindowBlocked: True`
+condition. This is the operator working as designed, not a
+stall: the spec's `maintenanceWindow` is closed right now, so
+the change (a new image, a scale, a rollout step) is deferred
+until the window opens, and then applies on the next reconcile.
+Check the window line in status — it names the schedule and
+whether it is open now. If the change cannot wait, remove the
+`maintenanceWindow` block from the manifest and re-apply (that
+is the emergency override), or use `mlop repair` for drift
+repairs, which apply immediately by design. If the window looks
+wrong, check the obvious mistakes first: days are three-letter
+abbreviations (`Mon`, not `Monday`), times are 24-hour UTC
+(`02:00`, not `2pm`), and an end earlier than the start means
+overnight — a `22:00`–`02:00` window on Monday covers Tuesday
+01:00. `mlop validate` rejects all three mistakes at apply time.
+
 ## `mlop watch` exits 2
 
 Exit codes: `0` means the deployment reached `Available`, `1`

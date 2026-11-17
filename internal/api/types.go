@@ -109,6 +109,19 @@ type ModelDeploymentSpec struct {
 	// (absent means false) — to change the spec while staying
 	// paused, the manifest must set paused: true.
 	Paused bool
+	// MaintenanceWindow restricts when the operator may change
+	// cluster objects for this deployment: applies, rollouts,
+	// scaling and garbage collection only run while the window
+	// is open. Outside the window a reconcile that would change
+	// anything defers — status reports WindowBlocked and the
+	// next window's opening — and picks up where it left off
+	// when the window opens. A deployment that is already in
+	// sync reconciles normally outside the window (there is
+	// nothing to defer), and an explicit `mlop repair` still
+	// applies immediately: repair is a human decision, not an
+	// automatic change. Nil means unrestricted: the operator
+	// may change things at any time. Times are UTC.
+	MaintenanceWindow *MaintenanceWindowSpec
 	// Env holds extra environment variables for the model container.
 	Env map[string]string
 	// Health configures the readiness gate for the model container.
@@ -188,6 +201,25 @@ type GateSpec struct {
 	// MinReadyRatio is the minimum ready/desired canary replicas
 	// (0-1). 0 means the default (1.0, every canary pod ready).
 	MinReadyRatio float64
+}
+
+// MaintenanceWindowSpec is a recurring weekly window, in UTC,
+// during which the operator may change cluster objects for a
+// deployment. Outside it, changes wait.
+type MaintenanceWindowSpec struct {
+	// Days lists the weekdays the window opens on, as
+	// three-letter abbreviations (Mon, Tue, Wed, Thu, Fri,
+	// Sat, Sun), case-insensitive. Empty means every day.
+	Days []string
+	// Start is the opening time, "HH:MM" in 24-hour UTC
+	// (e.g. "02:00").
+	Start string
+	// End is the closing time, "HH:MM" in 24-hour UTC. End may
+	// be earlier than Start: the window then runs overnight,
+	// past midnight into the next day (22:00–02:00 opens at
+	// 22:00 and closes at 02:00 the next morning). End equal
+	// to Start is invalid — that window would never open.
+	End string
 }
 
 // AvailabilitySpec configures how the operator keeps a model

@@ -126,6 +126,19 @@ cluster every time, and applies only the difference:
    drop the hardening — and the diff reasons name each moved
    security field, so drift and `mlop diff` report a security
    change instead of calling the Deployment in sync.
+4½. **Maintenance window.** After the plan and before any
+   cluster write, the gate checks `spec.maintenanceWindow`:
+   when the window is closed and the reconcile would change
+   anything — any non-NoOp plan action, or a canary / blue-green
+   rollout in flight, whose state machine may advance, promote,
+   abort, switch or fold — the whole reconcile defers, with the
+   phase preserved and a `WindowBlocked: True` condition naming
+   the next opening. The check sits here deliberately, after
+   the plan, so the gate never guesses what would change, and
+   a reconcile with nothing to do is not blocked. Rollout state
+   is untouched by the deferral, so a canary resumes from its
+   step. An explicit `mlop repair` never passes through this
+   gate: it plans and applies directly, by design.
 5. **Apply.** Each action executes against the `Cluster`
    interface through `retryApply`: a transient cluster error is
    retried with exponential backoff (3 attempts, 100ms base,

@@ -42,6 +42,7 @@ func Lint(d *ModelDeployment) []string {
 		add("spec.paused is true; the operator will not reconcile this deployment until it is resumed")
 	}
 	warns = append(warns, lintAvailability(spec)...)
+	warns = append(warns, lintMaintenanceWindow(spec.MaintenanceWindow)...)
 	warns = append(warns, lintSecurity(spec)...)
 	if spec.Strategy == StrategyCanary && spec.Canary != nil {
 		if spec.Canary.Weight > 50 {
@@ -110,6 +111,29 @@ func lintAvailability(spec ModelDeploymentSpec) []string {
 			"spec.availability.maxSkew is %d with %d replicas: the spread constraint allows every pod on one node", a.MaxSkew, replicas))
 	}
 	return warns
+}
+
+// lintMaintenanceWindow warns about a window so short that a
+// rollout may not fit inside it. A canary step needs its interval
+// plus a health-gate evaluation; a 5-minute window that opens at
+// 02:00 will strand a rollout mid-step at 02:05, and the next
+// step waits a whole day. The window is still valid — short
+// windows are a deliberate choice for some teams — it just should
+// not happen by accident.
+func lintMaintenanceWindow(w *MaintenanceWindowSpec) []string {
+	if w == nil {
+		return nil
+	}
+	start, errStart := parseHHMM(w.Start)
+	end, errEnd := parseHHMM(w.End)
+	if errStart != nil || errEnd != nil {
+		return nil
+	}
+	if dur := windowDurationMinutes(start, end); dur < 30 {
+		return []string{fmt.Sprintf(
+			"spec.maintenanceWindow is only %d minutes long: a canary step plus its health gate may not fit inside it, stranding the rollout until the next window", dur)}
+	}
+	return nil
 }
 
 // lintGate warns about a gate that can promote a rollout before
