@@ -42,6 +42,7 @@ type statusDetailView struct {
 	Autoscaling        *api.AutoscalingSpec       `json:"autoscaling,omitempty"`
 	Availability       *api.AvailabilitySpec      `json:"availability,omitempty"`
 	Security           *api.SecuritySpec          `json:"security,omitempty"`
+	Placement          *api.PlacementSpec         `json:"placement,omitempty"`
 	Message            string                     `json:"message"`
 	Conditions         []api.Condition            `json:"conditions,omitempty"`
 	Requeue            bool                       `json:"requeue"`
@@ -150,7 +151,8 @@ func cmdStatus(opts *options, args []string) int {
 			Strategy: d.Spec.Strategy, Paused: d.Spec.Paused, MaintenanceWindow: d.Spec.MaintenanceWindow,
 			Autoscaling:  d.Spec.Autoscaling,
 			Availability: d.Spec.Availability, Security: d.Spec.Security,
-			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
+			Placement: d.Spec.Placement,
+			Message:   d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
 		enc := json.NewEncoder(opts.stdout)
 		enc.SetIndent("", "  ")
@@ -212,6 +214,11 @@ func cmdStatus(opts *options, args []string) int {
 			onOff(d.Spec.Security.AllowPrivilegeEscalationEnabled()),
 			strings.Join(d.Spec.Security.EffectiveDropCapabilities(), ","),
 			d.Spec.Security.EffectiveSeccompProfile())
+	}
+	if d.Spec.Placement != nil {
+		// Placement has no defaults to resolve: the line says
+		// where the pods are pinned, or that they are not.
+		fmt.Fprintf(opts.stdout, "placement:    %s\n", d.Spec.Placement.Describe())
 	}
 	fmt.Fprintf(opts.stdout, "message:    %s\n", d.Status.Message)
 	if len(d.Status.Conditions) > 0 {
