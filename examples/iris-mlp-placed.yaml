@@ -1,0 +1,29 @@
+# Minimal ModelDeployment manifest with an explicit placement block:
+# the pods must land on a node labelled accelerator=nvidia-tesla-t4
+# and tolerate the gpu=true:NoSchedule taint on those nodes, plus a
+# dedicated taint they tolerate for 5 minutes after it appears
+# (NoExecute with a 300-second grace). Unconstrained deployments
+# omit placement entirely and schedule anywhere.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 2
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  placement:
+    nodeSelector:
+      accelerator: nvidia-tesla-t4
+    tolerations: gpu=true:NoSchedule, dedicated:Exists:NoExecute:300
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
