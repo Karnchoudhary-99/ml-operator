@@ -38,6 +38,7 @@ func Validate(d *ModelDeployment) []error {
 	errs = append(errs, validateStrategy(spec)...)
 	errs = append(errs, validateAutoscaling(spec.Autoscaling)...)
 	errs = append(errs, validateAvailability(spec)...)
+	errs = append(errs, validateMaintenanceWindow(spec.MaintenanceWindow)...)
 	errs = append(errs, validateSecurity(spec)...)
 	errs = append(errs, validateEnv(spec.Env)...)
 	errs = append(errs, validateHealth(spec.Health)...)
@@ -175,6 +176,30 @@ func validateAutoscaling(a *AutoscalingSpec) []error {
 // rendered. minAvailable must stay below the replica count: a PDB
 // that demands every replica available blocks every voluntary
 // eviction, including the node drain the PDB exists to survive.
+func validateMaintenanceWindow(w *MaintenanceWindowSpec) []error {
+	if w == nil {
+		return nil
+	}
+	var errs []error
+	for i, d := range w.Days {
+		if _, err := parseWeekday(d); err != nil {
+			errs = append(errs, fmt.Errorf("spec.maintenanceWindow.days[%d]: %w", i, err))
+		}
+	}
+	start, errStart := parseHHMM(w.Start)
+	if errStart != nil {
+		errs = append(errs, fmt.Errorf("spec.maintenanceWindow.start: %w", errStart))
+	}
+	end, errEnd := parseHHMM(w.End)
+	if errEnd != nil {
+		errs = append(errs, fmt.Errorf("spec.maintenanceWindow.end: %w", errEnd))
+	}
+	if errStart == nil && errEnd == nil && start == end {
+		errs = append(errs, fmt.Errorf("spec.maintenanceWindow.start %q equals end %q: a window that opens and closes at the same time never opens (use 00:00-23:59 for all day)", w.Start, w.End))
+	}
+	return errs
+}
+
 func validateAvailability(spec ModelDeploymentSpec) []error {
 	a := spec.Availability
 	if a == nil {
