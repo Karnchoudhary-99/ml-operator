@@ -126,6 +126,17 @@ cluster every time, and applies only the difference:
    drop the hardening — and the diff reasons name each moved
    security field, so drift and `mlop diff` report a security
    change instead of calling the Deployment in sync.
+
+   Placement rides on the same render as well: the pod template
+   carries the nodeSelector and tolerations from
+   `spec.placement` (absent means unconstrained), inherited by
+   canary and green Deployments for the same reason — a rollout
+   must not move the model off its nodes — and the diff reasons
+   name a nodeSelector or tolerations change, so drift and `mlop
+   diff` report a placement change instead of calling the
+   Deployment in sync. Placement has no defaults to fill in: an
+   absent block is a real choice (schedule anywhere), so the
+   render copies the spec's placement as written.
 4½. **Maintenance window.** After the plan and before any
    cluster write, the gate checks `spec.maintenanceWindow`:
    when the window is closed and the reconcile would change
