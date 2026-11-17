@@ -24,6 +24,10 @@ func TestCompletionCommand(t *testing.T) {
 	if code, out, _ := runCLI(t, "completion", "bash"); code != 0 || !strings.Contains(out, "complete -F _mlop mlop") {
 		t.Fatalf("completion bash exit %d, registers _mlop: %v", code, strings.Contains(out, "complete -F _mlop mlop"))
 	}
+	// scale must complete its --replicas flag and deployment names.
+	if code, out, _ := runCLI(t, "completion", "bash"); code != 0 || !strings.Contains(out, "scale)") || !strings.Contains(out, "--replicas --dry-run") {
+		t.Fatalf("completion bash exit %d, scale flags missing: %v", code, strings.Contains(out, "--replicas --dry-run"))
+	}
 }
 
 func TestCompletionCommandErrors(t *testing.T) {

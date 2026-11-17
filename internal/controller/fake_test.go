@@ -6,6 +6,53 @@ import (
 	"github.com/Karnchoudhary-99/ml-operator/internal/render"
 )
 
+// TestFakeClusterScaleDownClampsReady: re-applying a Deployment
+// with fewer replicas terminates pods, so the stored ready count
+// clamps to the new replica count — a Deployment scaled to 0
+// reports 0 ready, not its old pods. A scale-up never raises
+// readiness: the new pods are not ready until SetReady says so.
+func TestFakeClusterScaleDownClampsReady(t *testing.T) {
+	_, cluster, _ := setup(t)
+	key := "default/iris-mlp"
+	dep := func(replicas int32) render.Deployment {
+		return render.Deployment{
+			Name: "iris-mlp", Namespace: "default", Replicas: replicas,
+			Labels:   map[string]string{"app": "iris-mlp"},
+			Selector: map[string]string{"app": "iris-mlp"},
+			Container: render.Container{
+				Name: "model", Image: "img:v1", Port: 8080,
+			},
+		}
+	}
+
+	if err := cluster.ApplyDeployment(dep(2)); err != nil {
+		t.Fatalf("ApplyDeployment: %v", err)
+	}
+	if got := cluster.ReadyReplicas(key); got != 0 {
+		t.Fatalf("new Deployment ready = %d, want 0", got)
+	}
+	cluster.SetReady(key, 2)
+	if err := cluster.ApplyDeployment(dep(4)); err != nil {
+		t.Fatalf("ApplyDeployment (scale up): %v", err)
+	}
+	if got := cluster.ReadyReplicas(key); got != 2 {
+		t.Fatalf("after scale up ready = %d, want 2 (new pods not ready yet)", got)
+	}
+	cluster.SetReady(key, 4)
+	if err := cluster.ApplyDeployment(dep(1)); err != nil {
+		t.Fatalf("ApplyDeployment (scale down): %v", err)
+	}
+	if got := cluster.ReadyReplicas(key); got != 1 {
+		t.Fatalf("after scale down ready = %d, want 1 (terminated pods are not ready)", got)
+	}
+	if err := cluster.ApplyDeployment(dep(0)); err != nil {
+		t.Fatalf("ApplyDeployment (scale to zero): %v", err)
+	}
+	if got := cluster.ReadyReplicas(key); got != 0 {
+		t.Fatalf("after scale to zero ready = %d, want 0", got)
+	}
+}
+
 // TestFakeClusterModelLoadProbe checks the probe controls the
 // reconciler's gate reads: loading / loaded / failed transitions,
 // no-op for unknown Deployments, and survival across a

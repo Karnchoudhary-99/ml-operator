@@ -40,6 +40,7 @@ with the desired state.
 - [x] Drift detection (`mlop drift`, exit-code CI gate — `internal/controller/drift.go`)
 - [x] Drift repair (`mlop repair`, restores drifted/missing objects, never deletes unexpected ones — `internal/controller/repair.go`)
 - [x] Pod security hardening (`spec.security`: non-root uid, read-only rootfs, no privilege escalation, drop ALL, RuntimeDefault seccomp — hardened by default)
+- [x] Manual replica scaling (`mlop scale`, refuses when autoscaling owns replicas or the deployment is paused)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -495,6 +496,23 @@ when there is no previous version yet, when the deployment already
 serves it, or when the deployment is paused (resume it first).
 `mlop status <name>` shows the rollback target, and
 `examples/rollback-tour.sh` walks the whole story end to end.
+
+### Scaling replicas
+
+`mlop scale <name> --replicas N` sets the desired replica count
+directly — a spec change, so it bumps the generation and
+reconciles immediately, with no rollout: the Deployment is updated
+in place. Scaling to the current count is a no-op (exit 0, no
+generation bump), and `--dry-run` prints the change without
+writing state. Scaling to 0 is allowed and stops serving; the
+reconciler reports `0/0 replicas ready` afterwards. A manual scale
+records a `Scaled` event, so `mlop logs` shows who changed the
+count. It refuses in two cases: when autoscaling is enabled — the
+autoscaler owns the replica count and the reconciler would revert
+a manual scale on the next reconcile, so change
+`spec.autoscaling.minReplicas`/`maxReplicas` instead — and when
+the deployment is paused (resume it first).
+`examples/scale-tour.sh` walks the whole story end to end.
 
 ### Pausing reconciliation
 

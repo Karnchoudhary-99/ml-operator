@@ -103,6 +103,20 @@ burning failure budget) or the step interval has not elapsed yet
   first; rollback reconciles, and reconciliation is suspended
   while paused.
 
+## `mlop scale` refuses
+
+- **\"has autoscaling enabled\"** — the autoscaler owns the
+  replica count: the reconciler overwrites `spec.replicas` with
+  the scaler's decision on every reconcile, so a manual scale
+  would be reverted on the next resync. Change
+  `spec.autoscaling.minReplicas`/`maxReplicas` instead (or turn
+  autoscaling off in the manifest and re-apply).
+- **\"is paused; resume it first\"** — same as rollback: a scale
+  is a new generation that must reconcile, and reconciliation is
+  suspended while paused.
+- **\"--replicas N is required\"** — the flag is mandatory; a
+  negative value is rejected the same way.
+
 ## `mlop watch` exits 2
 
 Exit codes: `0` means the deployment reached `Available`, `1`

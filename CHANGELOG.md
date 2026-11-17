@@ -8,6 +8,15 @@ the first public version is cut.
 
 ### Added
 
+- Manual replica scaling — `mlop scale <name> --replicas N
+  [--dry-run]`, a spec change that bumps the generation and
+  reconciles immediately with no rollout. Scaling to the current
+  count is a no-op; scaling to 0 stops serving; every manual scale
+  records a `Scaled` event. It refuses when autoscaling is enabled
+  (the autoscaler owns replicas and would revert the change on the
+  next reconcile) and when the deployment is paused. `mlop
+  completion` covers the new command, and `examples/scale-tour.sh`
+  walks the whole story end to end.
 - Pod security hardening — `spec.security`, hardened by default:
   non-root uid 10001, read-only root filesystem, no privilege
   escalation, all Linux capabilities dropped, RuntimeDefault
@@ -76,6 +85,9 @@ the first public version is cut.
 
 ### Fixed
 
+- The fake cluster now clamps the ready count when a Deployment
+  is re-applied with fewer replicas, so a scale-down (and a scale
+  to 0) no longer reports the terminated pods as ready.
 - Re-registration no longer wipes stored status (registry).
 - `SpecsEqual` no longer ignores availability changes, so a
   PDB is updated when only the availability block changes.

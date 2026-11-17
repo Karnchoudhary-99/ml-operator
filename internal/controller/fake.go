@@ -82,7 +82,12 @@ func (f *FakeCluster) consumeFailure() bool {
 // the test (or demo) calls SetReady. Re-applying an existing
 // Deployment does NOT reset readiness: the fake does not simulate
 // pod restarts, so a test that needs a readiness drop after an
-// update must call SetReady explicitly.
+// update must call SetReady explicitly. One exception: a scale-down
+// terminates pods, so re-applying with fewer replicas clamps the
+// stored ready count to the new replica count — without the clamp
+// a Deployment scaled to 0 would still report its old pods ready.
+// A scale-up never raises readiness (the new pods are not ready
+// yet), so the clamp only ever lowers it.
 func (f *FakeCluster) ApplyDeployment(d render.Deployment) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -92,6 +97,8 @@ func (f *FakeCluster) ApplyDeployment(d render.Deployment) error {
 	key := d.Namespace + "/" + d.Name
 	if _, ok := f.deployments[key]; !ok {
 		f.ready[key] = 0
+	} else if f.ready[key] > d.Replicas {
+		f.ready[key] = d.Replicas
 	}
 	f.deployments[key] = d
 	return nil
