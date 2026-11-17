@@ -128,6 +128,14 @@ type Deployment struct {
 	// Tolerations lists the node taints the pod template's
 	// pods tolerate; nil means the pods tolerate nothing.
 	Tolerations []api.Toleration
+	// ImagePullSecrets names the secrets holding registry
+	// credentials for pulling the serving image; nil means
+	// the pods pull without credentials. Like placement, it
+	// is a property of the model, not of one revision:
+	// canary and green Deployments inherit it from
+	// DeploymentFor, so a rollout never fails to pull the
+	// new image for want of credentials.
+	ImagePullSecrets []string
 	// InitContainers run to completion before any serving
 	// container starts. With a model source set, the single
 	// entry is the model-download container that fetches the
@@ -262,6 +270,11 @@ func DeploymentFor(d api.ModelDeployment) Deployment {
 		// move a Deployment that was already rendered.
 		NodeSelector: copyStringMap(placementOf(d).NodeSelector),
 		Tolerations:  copyTolerations(placementOf(d).Tolerations),
+		// Pull secrets render as written too, and are copied
+		// for the same reason: a caller appending to the spec's
+		// slice afterwards must not change a Deployment that
+		// was already rendered.
+		ImagePullSecrets: copyStringSlice(d.Spec.ImagePullSecrets),
 	}
 	// Hardening travels with the pod template: anti-affinity and
 	// the spread constraint apply to canary and green Deployments
@@ -791,6 +804,19 @@ func copyStringMap(m map[string]string) map[string]string {
 	for k, v := range m {
 		out[k] = v
 	}
+	return out
+}
+
+// copyStringSlice copies a string list, or nil when the input
+// is nil, so a rendered Deployment never aliases the spec's
+// slice — a later append to the spec must not change a
+// Deployment that was already rendered.
+func copyStringSlice(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
 	return out
 }
 
