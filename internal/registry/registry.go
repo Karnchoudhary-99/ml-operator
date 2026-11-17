@@ -283,6 +283,17 @@ func SpecsEqual(a, b api.ModelDeploymentSpec) bool {
 	if a.Security != nil && !securityEqual(*a.Security, *b.Security) {
 		return false
 	}
+	// Placement is a spec change for the same reason: moving a
+	// model to different nodes must bump the generation, or
+	// `mlop apply` of a re-placed manifest would call it
+	// unchanged and the reconciler would keep serving from the
+	// old nodes.
+	if (a.Placement == nil) != (b.Placement == nil) {
+		return false
+	}
+	if a.Placement != nil && !placementEqual(*a.Placement, *b.Placement) {
+		return false
+	}
 	if len(a.Env) != len(b.Env) {
 		return false
 	}
@@ -406,6 +417,43 @@ func availabilityEqual(a, b api.AvailabilitySpec) bool {
 	}
 	if a.AntiAffinity != nil && *a.AntiAffinity != *b.AntiAffinity {
 		return false
+	}
+	return true
+}
+
+// placementEqual compares two placement specs by value: the
+// nodeSelector by content (map order is meaningless) and the
+// tolerations by value, in order — including the seconds, which
+// are pointers. A spec that survived a JSON round-trip (state
+// file) must still equal a freshly parsed manifest with the same
+// placement, or `mlop diff -f` would bump the generation on
+// every identical re-apply.
+func placementEqual(a, b api.PlacementSpec) bool {
+	if len(a.NodeSelector) != len(b.NodeSelector) {
+		return false
+	}
+	for k, v := range a.NodeSelector {
+		if bv, ok := b.NodeSelector[k]; !ok || bv != v {
+			return false
+		}
+	}
+	if len(a.Tolerations) != len(b.Tolerations) {
+		return false
+	}
+	for i := range a.Tolerations {
+		if a.Tolerations[i].Key != b.Tolerations[i].Key ||
+			a.Tolerations[i].Operator != b.Tolerations[i].Operator ||
+			a.Tolerations[i].Value != b.Tolerations[i].Value ||
+			a.Tolerations[i].Effect != b.Tolerations[i].Effect {
+			return false
+		}
+		if (a.Tolerations[i].TolerationSeconds == nil) != (b.Tolerations[i].TolerationSeconds == nil) {
+			return false
+		}
+		if a.Tolerations[i].TolerationSeconds != nil &&
+			*a.Tolerations[i].TolerationSeconds != *b.Tolerations[i].TolerationSeconds {
+			return false
+		}
 	}
 	return true
 }
