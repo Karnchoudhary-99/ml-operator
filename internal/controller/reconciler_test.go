@@ -519,3 +519,53 @@ func TestReconcilePausedBeforeFirstDeploy(t *testing.T) {
 		t.Fatalf("paused fresh deploy: Paused condition = %+v, want True", c)
 	}
 }
+
+// TestReconcileMetadataUpdate pins that a label/annotation change
+// re-applies: the reconciler updates the Deployment and the
+// Service, and the live objects carry the new metadata. The
+// selectors must not move — a metadata edit re-renders objects,
+// it never orphans pods or steals traffic.
+func TestReconcileMetadataUpdate(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	d := dep("iris-mlp", 1)
+	d.Spec.Labels = map[string]string{"team": "search"}
+	d.Spec.Annotations = map[string]string{"owner": "team-search"}
+	reg.Register(d)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := cluster.GetDeployment("default/iris-mlp")
+	if live.Labels["team"] != "search" || live.Annotations["owner"] != "team-search" {
+		t.Fatalf("live deployment metadata = labels %v annotations %v", live.Labels, live.Annotations)
+	}
+	if svc, _ := cluster.GetService("default/iris-mlp"); svc.Labels["team"] != "search" {
+		t.Fatalf("live service labels = %v", svc.Labels)
+	}
+
+	// A label/annotation change updates the Deployment and the Service.
+	d2 := dep("iris-mlp", 2)
+	d2.Spec.Labels = map[string]string{"team": "ranking"}
+	d2.Spec.Annotations = map[string]string{"owner": "team-ranking"}
+	reg.Register(d2)
+	res, err := rec.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	kinds := map[ActionKind]bool{}
+	for _, a := range res.Actions {
+		kinds[a.Kind] = true
+	}
+	if !kinds[ActionUpdateDeployment] || !kinds[ActionUpdateService] {
+		t.Fatalf("actions = %v, want deployment + service updates", res.Actions)
+	}
+	live, _ = cluster.GetDeployment("default/iris-mlp")
+	if live.Labels["team"] != "ranking" || live.Annotations["owner"] != "team-ranking" {
+		t.Fatalf("live deployment metadata after update = labels %v annotations %v", live.Labels, live.Annotations)
+	}
+	if live.Selector["app.kubernetes.io/name"] != "iris-mlp" {
+		t.Fatalf("selector moved on a metadata edit: %v", live.Selector)
+	}
+	if _, ok := live.Selector["team"]; ok {
+		t.Fatalf("custom label leaked into the selector: %v", live.Selector)
+	}
+}
