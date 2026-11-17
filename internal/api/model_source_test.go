@@ -166,3 +166,41 @@ func TestValidateModelSource(t *testing.T) {
 		t.Fatalf("empty checksum/mount path rejected: %v", errs)
 	}
 }
+
+// TestLintModelSource pins the warnings: an unverified
+// download warns, a root mount path warns, a verified source
+// with a normal mount path is clean, and a nil source is
+// clean (weights in the image).
+func TestLintModelSource(t *testing.T) {
+	sha := "9f2c4a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807"
+	contains := func(warns []string, want string) bool {
+		for _, w := range warns {
+			if strings.Contains(w, want) {
+				return true
+			}
+		}
+		return false
+	}
+	d := &ModelDeployment{Spec: ModelDeploymentSpec{
+		Model:       ModelSpec{Image: "registry.example.com/iris-mlp:v1", Framework: "onnx", Version: "v1"},
+		ModelSource: &ModelSourceSpec{URI: "https://artifacts.example.com/models/iris-mlp.onnx"},
+	}}
+	warns := Lint(d)
+	if !contains(warns, "without checksum verification") {
+		t.Fatalf("unverified download should warn, got %v", warns)
+	}
+	d.Spec.ModelSource.SHA256 = sha
+	d.Spec.ModelSource.MountPath = "/"
+	warns = Lint(d)
+	if !contains(warns, "mounts at the filesystem root") {
+		t.Fatalf("root mount path should warn, got %v", warns)
+	}
+	d.Spec.ModelSource.MountPath = "/models"
+	if warns := Lint(d); len(warns) != 0 {
+		t.Fatalf("verified source with a normal mount path should be clean, got %v", warns)
+	}
+	d.Spec.ModelSource = nil
+	if warns := Lint(d); len(warns) != 0 {
+		t.Fatalf("nil modelSource should be clean, got %v", warns)
+	}
+}
