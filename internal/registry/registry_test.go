@@ -592,3 +592,55 @@ func TestRegisterPreservesStatus(t *testing.T) {
 		t.Fatalf("fresh register dropped status: %+v", got)
 	}
 }
+
+// TestSpecsEqualModelSource: a model-source-only change is a
+// spec change — it must bump the generation on apply, or the
+// reconciler would keep serving the old artifact. Same class
+// as the placement bug: a field SpecsEqual ignores is a field
+// the operator silently never updates.
+func TestSpecsEqualModelSource(t *testing.T) {
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:    api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:     8080,
+			Replicas: func() *int32 { v := int32(3); return &v }(),
+			Strategy: api.StrategyRolling,
+			ModelSource: &api.ModelSourceSpec{
+				URI:    "https://artifacts.example.com/models/iris-mlp.onnx",
+				SHA256: "9f2c4a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807",
+			},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical model sources should be equal")
+	}
+	// Same values through fresh pointers must still be equal.
+	b = base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("model sources with equal values but fresh pointers should be equal")
+	}
+	for _, mutate := range []struct {
+		name string
+		f    func(*api.ModelSourceSpec)
+	}{
+		{"URI", func(m *api.ModelSourceSpec) { m.URI = "https://artifacts.example.com/models/iris-mlp-v2.onnx" }},
+		{"SHA256", func(m *api.ModelSourceSpec) {
+			m.SHA256 = "00004a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807"
+		}},
+		{"SHA256 cleared", func(m *api.ModelSourceSpec) { m.SHA256 = "" }},
+		{"MountPath", func(m *api.ModelSourceSpec) { m.MountPath = "/data/models" }},
+		{"DownloaderImage", func(m *api.ModelSourceSpec) { m.DownloaderImage = "curlimages/curl:8.9.0" }},
+	} {
+		b = base()
+		mutate.f(b.ModelSource)
+		if SpecsEqual(a, b) {
+			t.Fatalf("different %s should not be equal", mutate.name)
+		}
+	}
+	b = base()
+	b.ModelSource = nil
+	if SpecsEqual(a, b) {
+		t.Fatal("nil modelSource vs set block should not be equal")
+	}
+}
