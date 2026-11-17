@@ -1,0 +1,30 @@
+# Minimal ModelDeployment manifest with a model source: the
+# pods download the weights from an https URL at startup
+# instead of baking them into the serving image. The init
+# container fetches iris-mlp.onnx into the shared volume at
+# /models (verified against the sha256), and the serving
+# container reads it from MODEL_ARTIFACT_PATH. Deployments
+# without modelSource omit the block entirely and serve the
+# weights baked into their image.
+name: iris-mlp
+namespace: default
+spec:
+  model:
+    image: registry.example.com/iris-mlp:v1
+    framework: onnx
+    version: v1
+  replicas: 2
+  resources:
+    cpuRequest: 500m
+    cpuLimit: "1"
+    memoryRequest: 512Mi
+    memoryLimit: 1Gi
+  port: 8080
+  strategy: RollingUpdate
+  modelSource:
+    uri: https://artifacts.example.com/models/iris-mlp.onnx
+    sha256: 9f2c4a1b8e77d0a3c5f6b2e1d4a9c8b7f6e5d4c3b2a1908f7e6d5c4b3a291807
+  health:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
