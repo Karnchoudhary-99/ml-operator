@@ -692,3 +692,45 @@ func TestSpecsEqualImagePullSecrets(t *testing.T) {
 		t.Fatal("empty and nil pull-secret lists should be equal")
 	}
 }
+
+// TestSpecsEqualMetadata compares specs with custom labels and
+// annotations: identical metadata is equal, a changed label or
+// annotation differs, and nil vs an empty map is equal — dropping
+// the block from a manifest must not bump the generation.
+func TestSpecsEqualMetadata(t *testing.T) {
+	base := func() api.ModelDeploymentSpec {
+		return api.ModelDeploymentSpec{
+			Model:       api.ModelSpec{Image: "img:v2", Version: "v2"},
+			Port:        8080,
+			Labels:      map[string]string{"team": "search"},
+			Annotations: map[string]string{"owner": "team-search"},
+		}
+	}
+	a, b := base(), base()
+	if !SpecsEqual(a, b) {
+		t.Fatal("identical metadata specs should be equal")
+	}
+	b.Labels["team"] = "other"
+	if SpecsEqual(a, b) {
+		t.Fatal("different label value should not be equal")
+	}
+	b = base()
+	b.Annotations["owner"] = "someone-else"
+	if SpecsEqual(a, b) {
+		t.Fatal("different annotation value should not be equal")
+	}
+	b = base()
+	b.Labels = nil
+	b.Annotations = map[string]string{}
+	if SpecsEqual(a, b) {
+		t.Fatal("dropping labels should not be equal")
+	}
+	c, d := base(), base()
+	c.Labels = nil
+	c.Annotations = nil
+	d.Labels = map[string]string{}
+	d.Annotations = map[string]string{}
+	if !SpecsEqual(c, d) {
+		t.Fatal("nil metadata vs empty metadata should be equal")
+	}
+}
