@@ -260,3 +260,54 @@ func TestRoundTripConditionTransitionTimes(t *testing.T) {
 		t.Fatalf("restored Ready stamped %v, want %v", c.LastTransitionTime, stamped)
 	}
 }
+
+// TestRoundTripImagePullSecrets pins that pull secrets survive
+// a state round trip in both places that carry them: the
+// registry's spec (so a later apply compares against the real
+// credentials) and the restored cluster's rendered Deployment
+// (so a restart never drops the credentials off the pod
+// template and the next pull fails).
+func TestRoundTripImagePullSecrets(t *testing.T) {
+	d := dep()
+	d.Spec.ImagePullSecrets = []string{"regcred", "ghcr-creds"}
+	reg := registry.New()
+	reg.Register(d)
+	cluster := controller.NewFakeCluster()
+	rec := controller.New(reg, cluster)
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := Save(path, From(reg, cluster, rec)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rt := loaded.Restore()
+	entry := rt.Registry.Get("default/iris-mlp")
+	if entry == nil {
+		t.Fatalf("restored registry lost the deployment")
+	}
+	if got := entry.Deployment.Spec.ImagePullSecrets; len(got) != 2 || got[0] != "regcred" || got[1] != "ghcr-creds" {
+		t.Fatalf("restored spec ImagePullSecrets = %v", got)
+	}
+	live, ok := rt.Cluster.GetDeployment("default/iris-mlp")
+	if !ok {
+		t.Fatalf("restored cluster lost the Deployment")
+	}
+	if got := live.ImagePullSecrets; len(got) != 2 || got[0] != "regcred" || got[1] != "ghcr-creds" {
+		t.Fatalf("restored cluster Deployment ImagePullSecrets = %v", got)
+	}
+	// The restored runtime reconciles in sync: the secrets
+	// match, so nothing re-applies.
+	res, err := rt.Reconciler.Reconcile("default/iris-mlp")
+	if err != nil {
+		t.Fatalf("Reconcile after restore: %v", err)
+	}
+	if len(res.Actions) != 1 || res.Actions[0].Kind != controller.ActionNoOp {
+		t.Fatalf("reconcile after restore applied %v, want a single NoOp", res.Actions)
+	}
+}
