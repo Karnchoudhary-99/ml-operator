@@ -238,6 +238,9 @@ func SpecSchema() *schema {
 			prop("mountPath", strSchema("Where the shared volume mounts in both the init container and the serving container. Empty means the default (\"/models\"). Must be an absolute path.")),
 			prop("downloaderImage", strSchema("Init-container image that fetches the artifact. Empty means the default (\"curlimages/curl:8.5.0\").")),
 		)),
+		prop("imagePullSecrets", arrSchema("Kubernetes secrets holding registry credentials for pulling the serving image (e.g. a docker-registry secret for a private registry). Empty means the pods pull without credentials. Each name must be a DNS-1123 subdomain — enforced by the operator, not the schema.",
+			strSchema("One secret name, e.g. \"regcred\".")),
+		),
 		prop("env", &schema{
 			typ:                  "object",
 			description:          "Extra environment variables for the model container. Keys must match [A-Za-z_][A-Za-z0-9_]*.",
