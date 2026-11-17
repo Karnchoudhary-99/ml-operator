@@ -168,11 +168,14 @@ cluster every time, and applies only the difference:
    canary's (or green Deployment's) readiness plus error rate, p95
    latency and the model-load probe from cluster metrics, against
    the rollout's own thresholds (`canary.gate` or `blueGreen.gate`,
-   both defaulted to 5% errors / 500ms p95 / all pods ready). The
-   canary state machine holds, advances, promotes or aborts (3
-   consecutive failures); the blue-green one holds, switches, folds
-   or aborts. A still-loading model holds without burning failure
-   budget; a failed load is a real failure.
+   both defaulted to 5% errors / 500ms p95 / all pods ready). In
+   the simulated world the error rate and p95 come from `mlop
+   traffic`, which accumulates observation batches into cumulative
+   counters — the gate judges the cumulative rate, not the last
+   batch. The canary state machine holds, advances, promotes or
+   aborts (3 consecutive failures); the blue-green one holds,
+   switches, folds or aborts. A still-loading model holds without
+   burning failure budget; a failed load is a real failure.
 7. **Status.** The phase is recomputed from readiness every time
    (`Available` at full replicas, `Degraded` below, `Progressing`
    while converging) and the conditions are rebuilt, so a stale

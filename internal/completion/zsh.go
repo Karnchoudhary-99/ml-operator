@@ -149,8 +149,10 @@ func zshFlagSpec(f string) string {
 		return "'-f[ manifest file]:manifest:_files'"
 	case "-d":
 		return "'-d[ directory of manifests]:directory:_files -/'"
-	case "--tail", "--replicas":
+	case "--tail", "--replicas", "--requests", "--errors":
 		return fmt.Sprintf("'%s[ count]:count:'", f)
+	case "--p95-ms":
+		return fmt.Sprintf("'%s[ p95 latency in milliseconds]:latency:'", f)
 	case "--interval", "--timeout":
 		return fmt.Sprintf("'%s[ duration]:duration:'", f)
 	case "--namespace":

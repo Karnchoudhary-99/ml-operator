@@ -17,6 +17,14 @@
 # Run the command, capture its output, and fail unless the output
 # (a basic regex, the same language `grep -q` used before) matches.
 # A non-zero command exit fails the tour with the exit code.
+# The output reaches grep through a here-string, not a pipe:
+# `printf ... | grep -q` has a race — grep -q exits on the first
+# match while printf is still writing a long output, printf dies
+# on SIGPIPE, and under `set -o pipefail` that failure is the
+# pipeline's status even though the pattern matched (the
+# blue-green tour failed on CI exactly this way, 2026-11-17, on
+# an output that did contain the pattern). With a here-string the
+# check sees grep's exit code only, so an early match cannot fail.
 expect() {
 	local pat="$1"; shift
 	local out rc
@@ -25,7 +33,7 @@ expect() {
 		echo "expected $pat, but $* exited $rc" >&2
 		exit 1
 	fi
-	if printf '%s\n' "$out" | grep -q -- "$pat"; then
+	if grep -q -- "$pat" <<< "$out"; then
 		return 0
 	fi
 	echo "expected $pat in output of $* , got:" >&2

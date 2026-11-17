@@ -8,7 +8,7 @@
 //
 //	mlop [--state path] <command> [args]
 //
-// Commands: apply, validate, diff, drift, repair, status, logs, history, rollout, ready, load, rollback, scale, pause, resume, watch, backup, restore, crd, install, completion, version.
+// Commands: apply, validate, diff, drift, repair, status, logs, history, rollout, ready, load, traffic, rollback, scale, pause, resume, watch, backup, restore, crd, install, completion, version.
 package main
 
 import (
@@ -74,6 +74,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdReady(opts, rest[1:])
 	case "load":
 		return cmdLoad(opts, rest[1:])
+	case "traffic":
+		return cmdTraffic(opts, rest[1:])
 	case "rollback":
 		return cmdRollback(opts, rest[1:])
 	case "scale":
@@ -129,6 +131,8 @@ Commands:
   rollout status <name>                show canary rollout progress
   ready <name> --replicas N [--canary] simulate pods passing the readiness gate
   load <name> [--canary] [--loading | --fail] simulate the model-load probe (loaded, loading, or failed)
+  traffic <name> --requests N [--errors E] [--p95-ms M] [--canary]
+                                     simulate serving traffic: error rate + p95 latency for the health gate
   rollback <name>                      restore the previous image/version
   scale <name> --replicas N [--dry-run] set the desired replica count (refused when autoscaling is on)
   pause <name>                         suspend reconciliation (live objects keep serving)

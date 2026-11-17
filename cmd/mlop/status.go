@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Karnchoudhary-99/ml-operator/internal/api"
+	"github.com/Karnchoudhary-99/ml-operator/internal/controller"
 	"github.com/Karnchoudhary-99/ml-operator/internal/store"
 )
 
@@ -20,6 +21,28 @@ type statusListView struct {
 	Desired   int32     `json:"desired"`
 	Version   string    `json:"version"`
 	Message   string    `json:"message"`
+}
+
+// trafficView is the JSON form of one Deployment's recorded
+// traffic observation: cumulative requests/errors, the error rate
+// derived from them, and the latest p95. It is omitted when no
+// traffic has been observed for that Deployment.
+type trafficView struct {
+	Requests     int64   `json:"requests"`
+	Errors       int64   `json:"errors"`
+	ErrorRate    float64 `json:"errorRate"`
+	LatencyP95Ms float64 `json:"latencyP95Ms,omitempty"`
+}
+
+// describeTraffic renders one observation the way `mlop status`
+// prints it: cumulative counts and rate, plus the latest p95 when
+// one was reported.
+func describeTraffic(m controller.ClusterMetrics) string {
+	s := fmt.Sprintf("%d requests, %d errors (%.2f%% error rate)", m.Requests, m.Errors, 100*m.ErrorRate)
+	if m.LatencyP95Ms > 0 {
+		s += fmt.Sprintf(", p95 %.0fms", m.LatencyP95Ms)
+	}
+	return s
 }
 
 // statusDetailView is the JSON form of `mlop status <name> --json`.
@@ -43,9 +66,22 @@ type statusDetailView struct {
 	Availability       *api.AvailabilitySpec      `json:"availability,omitempty"`
 	Security           *api.SecuritySpec          `json:"security,omitempty"`
 	Placement          *api.PlacementSpec         `json:"placement,omitempty"`
+	Traffic            *trafficView               `json:"traffic,omitempty"`
+	CanaryTraffic      *trafficView               `json:"canaryTraffic,omitempty"`
+	GreenTraffic       *trafficView               `json:"greenTraffic,omitempty"`
 	Message            string                     `json:"message"`
 	Conditions         []api.Condition            `json:"conditions,omitempty"`
 	Requeue            bool                       `json:"requeue"`
+}
+
+// trafficOf returns the recorded traffic observation for one
+// Deployment, or nil when none has been observed for it.
+func trafficOf(rt *store.Runtime, target string) *trafficView {
+	m, ok := rt.Cluster.Metrics(target)
+	if !ok || m.Requests == 0 {
+		return nil
+	}
+	return &trafficView{Requests: m.Requests, Errors: m.Errors, ErrorRate: m.ErrorRate, LatencyP95Ms: m.LatencyP95Ms}
 }
 
 // cmdStatus implements `mlop status [name] [--json]`: reconcile first (the
@@ -141,6 +177,10 @@ func cmdStatus(opts *options, args []string) int {
 		return 1
 	}
 	d := rt.Registry.Get(key).Deployment
+	ns, name, _ := strings.Cut(key, "/")
+	traffic := trafficOf(rt, key)
+	canaryTraffic := trafficOf(rt, ns+"/"+name+"-canary")
+	greenTraffic := trafficOf(rt, ns+"/"+name+"-green")
 	if *jsonOut {
 		view := statusDetailView{
 			Name: d.Name, Namespace: namespaceOf(d),
@@ -152,7 +192,8 @@ func cmdStatus(opts *options, args []string) int {
 			Autoscaling:  d.Spec.Autoscaling,
 			Availability: d.Spec.Availability, Security: d.Spec.Security,
 			Placement: d.Spec.Placement,
-			Message:   d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
+			Traffic:   traffic, CanaryTraffic: canaryTraffic, GreenTraffic: greenTraffic,
+			Message: d.Status.Message, Conditions: d.Status.Conditions, Requeue: res.Requeue,
 		}
 		enc := json.NewEncoder(opts.stdout)
 		enc.SetIndent("", "  ")
@@ -219,6 +260,21 @@ func cmdStatus(opts *options, args []string) int {
 		// Placement has no defaults to resolve: the line says
 		// where the pods are pinned, or that they are not.
 		fmt.Fprintf(opts.stdout, "placement:    %s\n", d.Spec.Placement.Describe())
+	}
+	// Traffic lines appear only once traffic has been observed:
+	// a deployment with no observations shows nothing here, and
+	// a canary/green line appears while that rollout is in flight.
+	if traffic != nil {
+		m, _ := rt.Cluster.Metrics(key)
+		fmt.Fprintf(opts.stdout, "traffic:     %s\n", describeTraffic(m))
+	}
+	if canaryTraffic != nil {
+		m, _ := rt.Cluster.Metrics(ns + "/" + name + "-canary")
+		fmt.Fprintf(opts.stdout, "traffic canary: %s\n", describeTraffic(m))
+	}
+	if greenTraffic != nil {
+		m, _ := rt.Cluster.Metrics(ns + "/" + name + "-green")
+		fmt.Fprintf(opts.stdout, "traffic green: %s\n", describeTraffic(m))
 	}
 	fmt.Fprintf(opts.stdout, "message:    %s\n", d.Status.Message)
 	if len(d.Status.Conditions) > 0 {

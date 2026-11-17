@@ -43,6 +43,7 @@ func Commands() []Command {
 		{Name: "rollout", Description: "show canary or blue-green rollout progress", Subcommands: []string{"status"}, TakesName: true},
 		{Name: "ready", Description: "simulate pods passing the readiness gate", Flags: []string{"--replicas", "--canary", "--green"}, TakesName: true},
 		{Name: "load", Description: "simulate the model-load probe", Flags: []string{"--canary", "--green", "--loading", "--fail"}, TakesName: true},
+		{Name: "traffic", Description: "simulate serving traffic for the health gate", Flags: []string{"--canary", "--green", "--requests", "--errors", "--p95-ms"}, TakesName: true},
 		{Name: "rollback", Description: "restore the previous image/version", TakesName: true},
 		{Name: "scale", Description: "set the desired replica count", Flags: []string{"--replicas", "--dry-run"}, TakesName: true},
 		{Name: "pause", Description: "suspend reconciliation for a deployment", TakesName: true},
@@ -102,5 +103,5 @@ func nameCommands() []Command {
 // one of these should offer that value's kind (a file for -f/-d,
 // nothing mlop can know for the rest), never a flag or a name.
 func valueFlags() []string {
-	return []string{"-f", "-d", "--tail", "--replicas", "--interval", "--timeout", "--namespace", "--image"}
+	return []string{"-f", "-d", "--tail", "--replicas", "--interval", "--timeout", "--namespace", "--image", "--requests", "--errors", "--p95-ms"}
 }

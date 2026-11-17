@@ -132,6 +132,94 @@ func TestFakeClusterModelLoadProbe(t *testing.T) {
 	}
 }
 
+// TestFakeClusterTraffic covers SetTraffic: observations
+// accumulate into cumulative counters, ErrorRate is always the
+// cumulative ratio, the latest p95 wins, and the probe/CPU state
+// recorded alongside survives.
+func TestFakeClusterTraffic(t *testing.T) {
+	reg, cluster, rec := setup(t)
+	reg.Register(dep("iris-mlp", 1))
+	if _, err := rec.Reconcile("default/iris-mlp"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	// No traffic yet: no metrics entry at all.
+	if _, ok := cluster.Metrics("default/iris-mlp"); ok {
+		t.Fatalf("metrics exist before any traffic")
+	}
+
+	// First batch: 1000 requests, 10 errors, p95 180ms.
+	cluster.SetTraffic("default/iris-mlp", 1000, 10, 180)
+	m, ok := cluster.Metrics("default/iris-mlp")
+	if !ok {
+		t.Fatal("no metrics after SetTraffic")
+	}
+	if m.Requests != 1000 || m.Errors != 10 || m.ErrorRate != 0.01 || m.LatencyP95Ms != 180 {
+		t.Fatalf("first batch = %+v, want 1000 requests, 10 errors, 0.01 rate, p95 180", m)
+	}
+
+	// Second batch accumulates: 1000 more, 30 errors, p95 240ms.
+	// The rate is the cumulative 40/2000, not the second batch's
+	// 0.03, and the p95 is the latest observation.
+	cluster.SetTraffic("default/iris-mlp", 1000, 30, 240)
+	m, _ = cluster.Metrics("default/iris-mlp")
+	if m.Requests != 2000 || m.Errors != 40 || m.ErrorRate != 0.02 || m.LatencyP95Ms != 240 {
+		t.Fatalf("second batch = %+v, want 2000 requests, 40 errors, 0.02 rate, p95 240", m)
+	}
+
+	// A batch with no p95 leaves the previous p95 alone.
+	cluster.SetTraffic("default/iris-mlp", 500, 0, 0)
+	m, _ = cluster.Metrics("default/iris-mlp")
+	if m.Requests != 2500 || m.Errors != 40 || m.ErrorRate != 0.016 || m.LatencyP95Ms != 240 {
+		t.Fatalf("no-p95 batch = %+v, want 2500 requests, 40 errors, 0.016 rate, p95 240", m)
+	}
+
+	// Traffic keeps the probe and CPU state recorded alongside it
+	// (SetMetrics replaces the entry, so the probe is recorded
+	// after it — the same order the CLI uses).
+	cluster.SetMetrics("default/iris-mlp", ClusterMetrics{CPUUtilizationPercent: 140, RequestsPerSecond: -1, ErrorRate: m.ErrorRate, LatencyP95Ms: m.LatencyP95Ms, Requests: m.Requests, Errors: m.Errors})
+	cluster.SetModelLoaded("default/iris-mlp")
+	cluster.SetTraffic("default/iris-mlp", 100, 5, 200)
+	m, _ = cluster.Metrics("default/iris-mlp")
+	if m.CPUUtilizationPercent != 140 || !m.ModelLoadKnown || !m.ModelLoaded {
+		t.Fatalf("traffic clobbered probe/CPU state: %+v", m)
+	}
+	if m.Requests != 2600 || m.Errors != 45 {
+		t.Fatalf("counters after probe/CPU batch = %d/%d, want 2600/45", m.Requests, m.Errors)
+	}
+
+	// Traffic survives a snapshot/restore round-trip (the mlop CLI
+	// persists this state between invocations).
+	snap := cluster.Snapshot()
+	restored := NewFakeCluster()
+	restored.Restore(snap)
+	m, ok = restored.Metrics("default/iris-mlp")
+	if !ok || m.Requests != 2600 || m.Errors != 45 || m.ErrorRate != float64(45)/float64(2600) || m.LatencyP95Ms != 200 {
+		t.Fatalf("restored traffic = %+v, want 2600/45 cumulative", m)
+	}
+
+	// Defensive cases: no requests, negative errors, and more
+	// errors than requests all leave the counters untouched or
+	// clamped — they never corrupt the rate.
+	cluster.SetTraffic("default/iris-mlp", 0, 0, 500)
+	cluster.SetTraffic("default/iris-mlp", 100, -5, 500)
+	m, _ = cluster.Metrics("default/iris-mlp")
+	if m.Requests != 2700 || m.Errors != 45 {
+		t.Fatalf("defensive batches = %d/%d, want 2700/45", m.Requests, m.Errors)
+	}
+	cluster.SetTraffic("default/iris-mlp", 100, 500, 500)
+	m, _ = cluster.Metrics("default/iris-mlp")
+	if m.Requests != 2800 || m.Errors != 145 || m.ErrorRate != float64(145)/float64(2800) {
+		t.Fatalf("over-error batch = %+v, want errors clamped to requests", m)
+	}
+
+	// Traffic is a no-op for a Deployment the fake never saw.
+	cluster.SetTraffic("default/ghost", 100, 0, 100)
+	if _, ok := cluster.Metrics("default/ghost"); ok {
+		t.Fatalf("SetTraffic created metrics for an unknown Deployment")
+	}
+}
+
 // TestFakeClusterPDB covers the PDB surface: apply/get/delete,
 // delete of a missing PDB is a no-op, and PDBs survive a
 // snapshot/restore round-trip (the mlop CLI persists this state).
