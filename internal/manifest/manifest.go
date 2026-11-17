@@ -83,7 +83,7 @@ func mapDeployment(tree map[string]any, d *api.ModelDeployment) error {
 func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 	if err := checkKeys(spec, []string{
 		"model", "replicas", "resources", "port", "strategy",
-		"canary", "blueGreen", "autoscaling", "availability", "security", "placement", "modelSource", "env", "health",
+		"canary", "blueGreen", "autoscaling", "availability", "security", "placement", "modelSource", "imagePullSecrets", "env", "health",
 		"paused", "maintenanceWindow",
 	}, "spec"); err != nil {
 		return err
@@ -457,6 +457,20 @@ func mapSpec(spec map[string]any, s *api.ModelDeploymentSpec) error {
 			ms.DownloaderImage = v
 		}
 		s.ModelSource = ms
+	}
+
+	// imagePullSecrets is a list of secret names. The YAML
+	// dialect has no lists, so it writes a comma-separated
+	// string ("regcred, ghcr-creds"); JSON carries a real
+	// array. Both parse through stringListField, and `mlop
+	// status` prints the comma-separated form, so its output
+	// pastes straight back into a manifest.
+	if raw, ok := spec["imagePullSecrets"]; ok {
+		secrets, err := stringListField(raw, "spec.imagePullSecrets")
+		if err != nil {
+			return err
+		}
+		s.ImagePullSecrets = secrets
 	}
 
 	if raw, ok := spec["env"]; ok {
