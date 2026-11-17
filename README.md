@@ -41,6 +41,7 @@ with the desired state.
 - [x] Drift repair (`mlop repair`, restores drifted/missing objects, never deletes unexpected ones — `internal/controller/repair.go`)
 - [x] Pod security hardening (`spec.security`: non-root uid, read-only rootfs, no privilege escalation, drop ALL, RuntimeDefault seccomp — hardened by default)
 - [x] Manual replica scaling (`mlop scale`, refuses when autoscaling owns replicas or the deployment is paused)
+- [x] Maintenance windows (`spec.maintenanceWindow`: weekly UTC window, reconciles that would change anything defer outside it — `internal/api/window.go`, `internal/controller/window_test.go`)
 - [ ] Self-review checklist, then public
 
 ## Quick start
@@ -528,6 +529,44 @@ deployment, because apply replaces the whole spec. `mlop watch`
 refuses a paused deployment instead of waiting on a phase that
 cannot arrive. `examples/pause-tour.sh` walks the whole story end
 to end.
+
+### Maintenance windows
+
+`spec.maintenanceWindow` restricts when the operator may change
+cluster objects for a deployment: applies, rollouts, scaling and
+garbage collection only run while the window is open. A window is
+a recurring weekly schedule in UTC — days as three-letter
+abbreviations (`Mon`, `Tue`, …; empty means every day) plus
+`start`/`end` as `"HH:MM"`:
+
+```yaml
+spec:
+  maintenanceWindow:
+    days: Mon, Tue, Wed, Thu, Fri
+    start: 02:00
+    end: 04:00
+```
+
+End earlier than start means overnight: `22:00`–`02:00` opens at
+22:00 and closes at 02:00 the next morning, so a Monday window
+still covers Tuesday 01:00. Outside the window a reconcile that
+would change anything defers — nothing is applied, no rollout
+step advances, no canary promotes — and status reports a
+`WindowBlocked: True` condition with the next opening
+(`waiting for maintenance window — next opens Tue 02:00 UTC`).
+The phase is preserved (the model keeps serving), and the change
+applies on the next reconcile inside the window; a canary resumes
+from the step it was on. A reconcile with nothing to do is not
+blocked — an in-sync deployment outside its window still reports
+`Available`. `mlop status` shows the window and whether it is
+open now, and `mlop validate` warns when a window is under 30
+minutes (a canary step plus its health gate may not fit inside
+it). Two deliberate exceptions: `mlop repair` still applies
+immediately (repair is a human decision, not an automatic
+change), and removing the window from the manifest is the
+emergency override — apply without `maintenanceWindow` and the
+change lands at once. `examples/window-tour.sh` walks the whole
+story end to end.
 
 ### Pod security
 

@@ -154,6 +154,41 @@ resumes the deployment (absent means false). To change the spec
 while staying paused, the manifest must set `paused: true` —
 `mlop apply` and `mlop validate` both warn about it.
 
+## Maintenance windows
+
+```yaml
+spec:
+  maintenanceWindow:
+    days: Mon, Tue, Wed, Thu, Fri
+    start: 02:00
+    end: 04:00
+```
+
+A maintenance window is the scheduled-change switch: cluster
+changes for a deployment — applies, rollouts, scaling, garbage
+collection — only run while the window is open. Outside it, a
+reconcile that would change anything defers: the phase is
+preserved, status reports `WindowBlocked: True` with the next
+opening, and the change applies on the next reconcile inside
+the window. Times are UTC, days are three-letter abbreviations
+(empty means every day), and an end earlier than the start runs
+overnight past midnight. A window under 30 minutes draws a
+`mlop validate` warning — a canary step plus its health gate may
+not fit inside it.
+
+Three behaviours to know. First, an in-sync deployment is not
+blocked: a reconcile with nothing to do still runs outside the
+window, so `mlop status` keeps reporting `Available` and the
+condition stays `False`. Second, a canary or blue-green rollout
+in flight is held whole — the state machine never advances,
+promotes or aborts outside the window, and it resumes from the
+step it was on when the window opens. Third, `mlop repair` is
+the deliberate exception: it is an explicit human action, so it
+applies immediately even outside the window, and removing the
+window from the manifest is the emergency override for an urgent
+change. `mlop status` shows the window and whether it is open
+now; `mlop diff` shows the pending plan while a change waits.
+
 ## Detecting drift
 
 ```bash
