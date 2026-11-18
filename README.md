@@ -5,7 +5,7 @@ A Kubernetes operator for deploying ML models — declare a
 Service, autoscaling and rollout, then keeps the live state converged
 with the desired state.
 
-> **Status:** in progress (project #38 of the portfolio program).
+> **Status:** complete — project #38 of the portfolio program.
 > The operator core is dependency-free Go; the Kubernetes client
 > integration lands with the controller-runtime phase of the roadmap.
 
@@ -47,7 +47,7 @@ with the desired state.
 - [x] Model source (`spec.modelSource`: the pod downloads the model artifact from an http(s) URI into a shared volume at startup, checksum-verified when a sha256 is set — `internal/api/model_source_test.go`, `internal/render/model_source_test.go`)
 - [x] Image pull secrets (`spec.imagePullSecrets`: the Kubernetes secrets holding registry credentials for pulling the serving image — `internal/api/image_pull_secrets_test.go`, `internal/render/image_pull_secrets_test.go`)
 - [x] Custom labels and annotations (`spec.labels` / `spec.annotations`: team metadata stamped onto every rendered object, never touching the operator's selectors — `internal/api/metadata_test.go`, `internal/render/metadata_test.go`)
-- [ ] Self-review checklist, then public
+- [x] Self-review checklist, then public (fresh-clone verification: 357 tests green incl. `-race`, all 20 example tours pass, demo verified)
 
 ## Quick start
 
